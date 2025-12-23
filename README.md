@@ -109,8 +109,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Emadhabibnia1385/ExpiryHub/m
 | `/add` | افزودن اکانت/اشتراک جدید |
 | `/list` | مشاهده لیست تمام اکانت‌ها |
 | `/search` | جستجوی اکانت |
-| `/addtype` | افزودن دسته‌بندی جدید |
-| `/types` | مشاهده دسته‌بندی‌ها |
 | `/backup` | دریافت بکاپ دیتابیس |
 | `/settings` | تنظیمات ربات |
 | `/help` | راهنمای کامل |
@@ -254,6 +252,7 @@ python3 bot.py
 **ساخته شده با ❤️ توسط [Emad Habibnia](https://t.me/EmadHabibnia)**
 
 </div>
+
 
 
 
