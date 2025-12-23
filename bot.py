@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 ExpiryHub - سیستم مدیریت تمدید اکانت‌ها
@@ -135,7 +134,7 @@ STRINGS = {
         "🛠 توسعه‌دهنده: @emadhabibnia"
     ),
     "user_inquiry": "🔍 استعلام اکانت‌های دریافتی",
-    "admin_request": "⭐️ درخواست ادمین شدن",
+    "admin_request": "⭐ درخواست ادمین شدن",
     "admin_management": "👥 مدیریت ادمین",
     "admin_requests_disabled": "❌ درخواست ادمین شدن در حال حاضر غیرفعال است.",
     "admin_request_sent": "✅ درخواست شما ثبت شد و منتظر تایید ادمین اصلی است.",
@@ -253,6 +252,12 @@ def data_owner_key(admin_key: str) -> str:
     if admin_key != MAIN_ADMIN_KEY and share_admin_data_enabled():
         return MAIN_ADMIN_KEY
     return admin_key
+
+def get_owner_key(user) -> str | None:
+    admin_key = get_admin_key(user)
+    if not admin_key:
+        return None
+    return data_owner_key(admin_key)
 
 def upsert_admin(admin_key: str, tg_id: int | None, username: str | None, role: str = "admin"):
     conn = connect()
@@ -980,8 +985,8 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update, context):
         return MENU
     context.user_data.clear()
-    admin_key = get_admin_key(update.effective_user)
-    kb = type_pick_kb(admin_key)
+    owner_key = get_owner_key(update.effective_user)
+    kb = type_pick_kb(owner_key)
     if kb is None:
         await update.message.reply_text(
             tr("no_types"),
@@ -998,8 +1003,8 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update, context):
         return MENU
     context.user_data.clear()
-    admin_key = get_admin_key(update.effective_user)
-    await update.message.reply_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb(admin_key))
+    owner_key = get_owner_key(update.effective_user)
+    await update.message.reply_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb(owner_key))
     return MENU
 
 async def cmd_addtype(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1065,8 +1070,8 @@ async def cmd_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await require_admin(update, context):
         return MENU
     context.user_data.clear()
-    admin_key = get_admin_key(update.effective_user)
-    types = get_types(data_owner_key(admin_key))
+    owner_key = get_owner_key(update.effective_user)
+    types = get_types(owner_key)
     
     if not types:
         await update.message.reply_text(
@@ -1078,7 +1083,7 @@ async def cmd_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return MENU
     
-    counts = get_accounts_count_by_type(admin_key)
+    counts = get_accounts_count_by_type(owner_key)
     text = "🗂 لیست نوع اکانت‌ها\n\n"
     buttons = []
     
@@ -1394,7 +1399,7 @@ async def cmd_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def receive_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
-    admin_key = get_admin_key(update.effective_user)
+    admin_key = get_owner_key(update.effective_user)
     
     if not query or len(query) < 2:
         await update.message.reply_text("❌ حداقل 2 کاراکتر وارد کنید")
@@ -1448,8 +1453,8 @@ async def menu_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MENU
     context.user_data.clear()
     
-    admin_key = get_admin_key(update.effective_user)
-    kb = type_pick_kb(admin_key)
+    owner_key = get_owner_key(update.effective_user)
+    kb = type_pick_kb(owner_key)
     if kb is None:
         await q.edit_message_text(
             tr("no_types"),
@@ -1470,8 +1475,8 @@ async def menu_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(tr("unknown"), reply_markup=main_menu_kb("user"))
         return MENU
     context.user_data.clear()
-    admin_key = get_admin_key(update.effective_user)
-    await q.edit_message_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb(admin_key))
+    owner_key = get_owner_key(update.effective_user)
+    await q.edit_message_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb(owner_key))
     return MENU
 
 async def menu_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1516,8 +1521,8 @@ async def cmd_types_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if get_user_role(update.effective_user) == "user":
         await q.edit_message_text(tr("unknown"), reply_markup=main_menu_kb("user"))
         return MENU
-    admin_key = get_admin_key(update.effective_user)
-    types = get_types(data_owner_key(admin_key))
+    owner_key = get_owner_key(update.effective_user)
+    types = get_types(owner_key)
     if not types:
         await q.edit_message_text(
             "❌ هیچ نوع اکانتی وجود ندارد",
@@ -1528,7 +1533,7 @@ async def cmd_types_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return MENU
     
-    counts = get_accounts_count_by_type(admin_key)
+    counts = get_accounts_count_by_type(owner_key)
     text = "🗂 لیست نوع اکانت‌ها\n\n"
     buttons = []
     
@@ -1586,9 +1591,9 @@ async def types_add_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return TYPES_ADD_WAIT
 
 async def types_add_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     title = update.message.text.strip()
-    ok, reason = add_type(title, data_owner_key(admin_key))
+    ok, reason = add_type(title, owner_key)
     if ok:
         await update.message.reply_text(tr("types_added"), reply_markup=types_kb())
     else:
@@ -1602,7 +1607,7 @@ async def types_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if get_user_role(update.effective_user) == "user":
         await q.edit_message_text(tr("unknown"), reply_markup=main_menu_kb("user"))
         return MENU
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
     page = 0
     if q.data.startswith("types_list:"):
@@ -1663,8 +1668,8 @@ async def types_edit_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
     tid = context.user_data.get("types_edit_id")
     page = context.user_data.get("types_edit_page", 0)
     new_title = update.message.text.strip()
-    admin_key = get_admin_key(update.effective_user)
-    ok = edit_type(int(tid), new_title, data_owner_key(admin_key))
+    owner_key = get_owner_key(update.effective_user)
+    ok = edit_type(int(tid), new_title, owner_key)
     if ok:
         await update.message.reply_text(tr("types_edited"), reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📋 بازگشت", callback_data=f"types_list:{page}")],
@@ -1682,9 +1687,8 @@ async def types_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(tr("unknown"), reply_markup=main_menu_kb("user"))
         return MENU
     _, tid, page = q.data.split(":")
-    admin_key = get_admin_key(update.effective_user)
-    owner_key = data_owner_key(admin_key)
-    ok, reason = delete_type(int(tid), admin_key, owner_key)
+    owner_key = get_owner_key(update.effective_user)
+    ok, reason = delete_type(int(tid), owner_key, owner_key)
     
     if not ok and reason == "blocked":
         await q.answer(tr("types_delete_blocked"), show_alert=True)
@@ -1802,7 +1806,7 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, key = q.data.split(":", 1)
     context.user_data.clear()
     context.user_data["edit_text_key"] = key
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     owner_key = data_owner_key(admin_key)
     context.user_data["edit_text_owner"] = owner_key
     
@@ -1838,8 +1842,8 @@ async def type_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     
     _, tid = q.data.split(":")
-    admin_key = get_admin_key(update.effective_user)
-    title = type_title_by_id(int(tid), data_owner_key(admin_key))
+    owner_key = get_owner_key(update.effective_user)
+    title = type_title_by_id(int(tid), owner_key)
     if not title:
         role = get_user_role(update.effective_user)
         await q.edit_message_text(tr("no_types"), reply_markup=main_menu_kb(role))
@@ -1847,7 +1851,7 @@ async def type_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data["account_type_id"] = int(tid)
     context.user_data["account_type_title"] = title
-    context.user_data["admin_key"] = admin_key
+    context.user_data["owner_key"] = owner_key
     await q.edit_message_text(tr("choose_start"), reply_markup=start_choice_kb())
     return START_CHOICE
 
@@ -1856,7 +1860,7 @@ async def start_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "start"
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
     if q.data == "start_today":
         new_start = date.today().strftime("%Y-%m-%d")
@@ -1867,7 +1871,7 @@ async def start_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             conn = connect()
             cur = conn.cursor()
-            cur.execute("SELECT duration_days FROM accounts WHERE id=? AND admin_key=?", (cid, admin_key))
+            cur.execute("SELECT duration_days FROM accounts WHERE id=? AND admin_key=?", (cid, owner_key))
             row = cur.fetchone()
             if not row:
                 conn.close()
@@ -1878,12 +1882,12 @@ async def start_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             new_end = compute_end_date(new_start, duration_days)
             cur.execute(
                 "UPDATE accounts SET start_date=?, end_date=? WHERE id=? AND admin_key=?",
-                (new_start, new_end, cid, admin_key),
+                (new_start, new_end, cid, owner_key),
             )
             conn.commit()
             conn.close()
             
-            msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد", admin_key)
+            msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد", owner_key)
             if not msg:
                 await q.message.reply_text("❌ اکانت پیدا نشد")
                 return MENU
@@ -1914,14 +1918,14 @@ async def start_gregorian_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         return START_GREGORIAN
     
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "start"
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     if is_edit:
         cid = int(context.user_data["edit_cid"])
         enc_back = context.user_data["edit_enc_back"]
         
         conn = connect()
         cur = conn.cursor()
-        cur.execute("SELECT duration_days FROM accounts WHERE id=? AND admin_key=?", (cid, admin_key))
+        cur.execute("SELECT duration_days FROM accounts WHERE id=? AND admin_key=?", (cid, owner_key))
         row = cur.fetchone()
         if not row:
             conn.close()
@@ -1932,12 +1936,12 @@ async def start_gregorian_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         new_end = compute_end_date(text, duration_days)
         cur.execute(
             "UPDATE accounts SET start_date=?, end_date=? WHERE id=? AND admin_key=?",
-            (text, new_end, cid, admin_key),
+            (text, new_end, cid, owner_key),
         )
         conn.commit()
         conn.close()
         
-        msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد", admin_key)
+        msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد", owner_key)
         if not msg:
             await update.message.reply_text("❌ اکانت پیدا نشد")
             return MENU
@@ -1964,14 +1968,14 @@ async def start_jalali_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return START_JALALI
     
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "start"
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     if is_edit:
         cid = int(context.user_data["edit_cid"])
         enc_back = context.user_data["edit_enc_back"]
         
         conn = connect()
         cur = conn.cursor()
-        cur.execute("SELECT duration_days FROM accounts WHERE id=? AND admin_key=?", (cid, admin_key))
+        cur.execute("SELECT duration_days FROM accounts WHERE id=? AND admin_key=?", (cid, owner_key))
         row = cur.fetchone()
         if not row:
             conn.close()
@@ -1982,12 +1986,12 @@ async def start_jalali_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_end = compute_end_date(new_start, duration_days)
         cur.execute(
             "UPDATE accounts SET start_date=?, end_date=? WHERE id=? AND admin_key=?",
-            (new_start, new_end, cid, admin_key),
+            (new_start, new_end, cid, owner_key),
         )
         conn.commit()
         conn.close()
         
-        msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد", admin_key)
+        msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد", owner_key)
         if not msg:
             await update.message.reply_text("❌ اکانت پیدا نشد")
             return MENU
@@ -2009,7 +2013,7 @@ async def duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "duration"
     mapping = {"dur_30": 30, "dur_90": 90, "dur_180": 180, "dur_365": 365}
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
     if q.data in mapping:
         days = mapping[q.data]
@@ -2020,7 +2024,7 @@ async def duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
             
             conn = connect()
             cur = conn.cursor()
-            cur.execute("SELECT start_date FROM accounts WHERE id=? AND admin_key=?", (cid, admin_key))
+            cur.execute("SELECT start_date FROM accounts WHERE id=? AND admin_key=?", (cid, owner_key))
             row = cur.fetchone()
             if not row:
                 conn.close()
@@ -2031,12 +2035,12 @@ async def duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
             new_end = compute_end_date(start_date_s, days)
             cur.execute(
                 "UPDATE accounts SET duration_days=?, end_date=? WHERE id=? AND admin_key=?",
-                (days, new_end, cid, admin_key),
+                (days, new_end, cid, owner_key),
             )
             conn.commit()
             conn.close()
             
-            msg = format_account_update_message(cid, "✅ مدت زمان بروزرسانی شد", admin_key)
+            msg = format_account_update_message(cid, "✅ مدت زمان بروزرسانی شد", owner_key)
             if not msg:
                 await q.message.reply_text("❌ اکانت پیدا نشد")
                 return MENU
@@ -2071,14 +2075,14 @@ async def duration_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         return DURATION_MANUAL
     
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "duration"
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     if is_edit:
         cid = int(context.user_data["edit_cid"])
         enc_back = context.user_data["edit_enc_back"]
         
         conn = connect()
         cur = conn.cursor()
-        cur.execute("SELECT start_date FROM accounts WHERE id=? AND admin_key=?", (cid, admin_key))
+        cur.execute("SELECT start_date FROM accounts WHERE id=? AND admin_key=?", (cid, owner_key))
         row = cur.fetchone()
         if not row:
             conn.close()
@@ -2089,12 +2093,12 @@ async def duration_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         new_end = compute_end_date(start_date_s, days)
         cur.execute(
             "UPDATE accounts SET duration_days=?, end_date=? WHERE id=? AND admin_key=?",
-            (days, new_end, cid, admin_key),
+            (days, new_end, cid, owner_key),
         )
         conn.commit()
         conn.close()
         
-        msg = format_account_update_message(cid, "✅ مدت زمان بروزرسانی شد", admin_key)
+        msg = format_account_update_message(cid, "✅ مدت زمان بروزرسانی شد", owner_key)
         if not msg:
             await update.message.reply_text("❌ اکانت پیدا نشد")
             return MENU
@@ -2130,7 +2134,7 @@ async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["description"] = str(update.message.text).strip()
 
     type_title = context.user_data["account_type_title"]
-    admin_key = context.user_data["admin_key"]
+    owner_key = context.user_data["owner_key"]
     start_date_s = context.user_data["start_date"]
     duration_days = int(context.user_data["duration_days"])
     end_date_s = context.user_data["end_date"]
@@ -2148,7 +2152,7 @@ async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             int(context.user_data["account_type_id"]),
-            admin_key, start_date_s, end_date_s, duration_days,
+            owner_key, start_date_s, end_date_s, duration_days,
             buyer_tg, login, password, description,
         ))
         conn.commit()
@@ -2191,7 +2195,7 @@ async def list_type_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE, type_id, page):
     q = update.callback_query
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
     conn = connect()
     cur = conn.cursor()
@@ -2201,14 +2205,14 @@ async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
             FROM accounts c
             JOIN account_types t ON t.id = c.account_type_id
             WHERE c.admin_key=?
-        """, (admin_key,))
+        """, (owner_key,))
     else:
         cur.execute("""
             SELECT c.id, c.login, c.end_date, t.title
             FROM accounts c
             JOIN account_types t ON t.id = c.account_type_id
             WHERE c.account_type_id=? AND c.admin_key=?
-        """, (type_id, admin_key))
+        """, (type_id, owner_key))
     raw = cur.fetchall()
     conn.close()
     
@@ -2264,7 +2268,7 @@ async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
     kb_rows.append([InlineKeyboardButton(tr("back_filters"), callback_data="menu_list")])
     kb_rows.append([InlineKeyboardButton(tr("home"), callback_data="home")])
     
-    title = "📋 کلیه اکانت‌ها" if type_id is None else f"📋 {type_title_by_id(type_id, data_owner_key(admin_key)) or '-'}"
+    title = "📋 کلیه اکانت‌ها" if type_id is None else f"📋 {type_title_by_id(type_id, owner_key) or '-'}"
     header = (
         f"{title}\n\n"
         "اکانت‌ها بر اساس نزدیک‌ترین تاریخ پایان،\n"
@@ -2290,9 +2294,9 @@ async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, cid_s, enc_back = q.data.split(":", 2)
     cid = int(cid_s)
     back_cb = dec_cb(enc_back)
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
-    msg = get_account_full_text(cid, admin_key)
+    msg = get_account_full_text(cid, owner_key)
     if not msg:
         await q.answer("یافت نشد", show_alert=True)
         return MENU
@@ -2307,14 +2311,14 @@ async def renew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, cid_s, enc_back = q.data.split(":", 2)
     cid = int(cid_s)
     back_cb = dec_cb(enc_back)
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
     conn = connect()
     cur = conn.cursor()
     cur.execute("""
         SELECT c.account_type_id, c.duration_days, c.buyer_tg, c.login, c.password, c.description
         FROM accounts c WHERE c.id=? AND c.admin_key=?
-    """, (cid, admin_key))
+    """, (cid, owner_key))
     row = cur.fetchone()
     
     if not row:
@@ -2323,14 +2327,14 @@ async def renew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MENU
     
     account_type_id, duration_days, buyer_tg, login, password, description = row
-    type_title = type_title_by_id(int(account_type_id), data_owner_key(admin_key)) or "نامشخص"
+    type_title = type_title_by_id(int(account_type_id), owner_key) or "نامشخص"
     
     new_start = date.today().strftime("%Y-%m-%d")
     new_end = compute_end_date(new_start, int(duration_days))
     
     cur.execute(
         "UPDATE accounts SET start_date=?, end_date=? WHERE id=? AND admin_key=?",
-        (new_start, new_end, cid, admin_key),
+        (new_start, new_end, cid, owner_key),
     )
     conn.commit()
     conn.close()
@@ -2359,12 +2363,12 @@ async def delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, cid_s, enc_back = q.data.split(":", 2)
     cid = int(cid_s)
     back_cb = dec_cb(enc_back)
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
     try:
         conn = connect()
         cur = conn.cursor()
-        cur.execute("DELETE FROM accounts WHERE id=? AND admin_key=?", (cid, admin_key))
+        cur.execute("DELETE FROM accounts WHERE id=? AND admin_key=?", (cid, owner_key))
         deleted = cur.rowcount
         conn.commit()
         conn.close()
@@ -2398,10 +2402,9 @@ async def send_ready_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     _, key, cid_s, enc_back = q.data.split(":", 3)
     cid = int(cid_s)
-    admin_key = get_admin_key(update.effective_user)
-    owner_key = data_owner_key(admin_key)
+    owner_key = get_owner_key(update.effective_user)
     
-    text = render_template_for_account(key, cid, admin_key, owner_key)
+    text = render_template_for_account(key, cid, owner_key, owner_key)
     if not text:
         await q.answer("اکانت پیدا نشد", show_alert=True)
         return MENU
@@ -2416,9 +2419,9 @@ async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     _, cid_s, enc_back = q.data.split(":", 2)
     cid = int(cid_s)
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
-    msg = get_account_full_text(cid, admin_key)
+    msg = get_account_full_text(cid, owner_key)
     if not msg:
         await q.answer("یافت نشد", show_alert=True)
         return MENU
@@ -2468,8 +2471,8 @@ async def edit_field_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     context.user_data["edit_cid"] = int(cid_s)
     context.user_data["edit_enc_back"] = enc_back
     
-    admin_key = get_admin_key(update.effective_user)
-    msg = get_account_full_text(int(cid_s), admin_key)
+    owner_key = get_owner_key(update.effective_user)
+    msg = get_account_full_text(int(cid_s), owner_key)
     if msg:
         await q.message.reply_text(
             msg + f"\n\n━━━━━━━━\n{title}\n✍️ متن جدید:",
@@ -2497,7 +2500,7 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     field = context.user_data.get("edit_field")
     cid = context.user_data.get("edit_cid")
     enc_back = context.user_data.get("edit_enc_back")
-    admin_key = get_admin_key(update.effective_user)
+    owner_key = get_owner_key(update.effective_user)
     
     if not field or not cid or not enc_back:
         await update.message.reply_text(tr("unknown"))
@@ -2513,7 +2516,7 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur = conn.cursor()
     cur.execute(
         f"UPDATE accounts SET {field}=? WHERE id=? AND admin_key=?",
-        (new_val, int(cid), admin_key),
+        (new_val, int(cid), owner_key),
     )
     conn.commit()
     conn.close()
@@ -2524,7 +2527,7 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "password": "✅ پسورد بروزرسانی شد",
         "description": "✅ توضیحات بروزرسانی شد",
     }
-    msg = format_account_update_message(int(cid), titles.get(field, "✅ بروزرسانی شد"), admin_key)
+    msg = format_account_update_message(int(cid), titles.get(field, "✅ بروزرسانی شد"), owner_key)
     if not msg:
         await update.message.reply_text("❌ اکانت پیدا نشد")
         return MENU
