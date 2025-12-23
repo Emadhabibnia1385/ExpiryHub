@@ -2698,6 +2698,12 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
+            CallbackQueryHandler(go_home, pattern="^home$"),
+            CallbackQueryHandler(info_handler, pattern=r"^info:\d+:.+"),
+            CallbackQueryHandler(types_list, pattern=r"^types_list:\d+$"),
+            CallbackQueryHandler(text_edit_prompt, pattern=r"^txt_edit:.+"),
+            CallbackQueryHandler(admin_request_approve, pattern=r"^admin_req_approve:\d+$"),
+            CallbackQueryHandler(admin_request_reject, pattern=r"^admin_req_reject:\d+$"),
         ],
         allow_reentry=True,
         per_message=False,
