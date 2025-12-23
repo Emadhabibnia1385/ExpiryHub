@@ -85,50 +85,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Emadhabibnia1385/ExpiryHub/m
 ```
 
 > **نکته:** برای اجرای این دستور نیاز به دسترسی root دارید.
-
-### روش دوم: نصب دستی 🔧
-
-#### پیش‌نیازها:
-- Python 3.8 یا بالاتر
-- Git
-- سیستم عامل Linux (Ubuntu/Debian پیشنهادی)
-
-#### مراحل نصب:
-
-1️⃣ **کلون کردن پروژه:**
-```bash
-git clone https://github.com/Emadhabibnia1385/ExpiryHub.git
-cd ExpiryHub
-```
-
-2️⃣ **ساخت محیط مجازی:**
-```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-3️⃣ **نصب وابستگی‌ها:**
-```bash
-pip install -r requirements.txt
-```
-
-4️⃣ **تنظیمات:**
-```bash
-cp .env.example .env
-nano .env
-```
-
-فایل `.env` را با اطلاعات زیر پر کنید:
-```env
-TOKEN=توکن_ربات_از_بات_فادر
-ADMIN_CHAT_ID=آیدی_عددی_شما
-```
-
-5️⃣ **اجرای ربات:**
-```bash
-python3 bot.py
-```
-
 ---
 
 ## 📱 راهنمای استفاده
@@ -298,6 +254,7 @@ python3 bot.py
 **ساخته شده با ❤️ توسط [Emad Habibnia](https://t.me/EmadHabibnia)**
 
 </div>
+
 
 
 
