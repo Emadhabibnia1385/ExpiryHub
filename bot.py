@@ -115,10 +115,29 @@ STRINGS = {
     "home": "🏠 منو",
     "back_filters": "⬅️ تغییر فیلتر",
     "unknown": "⚠️ ورودی نامعتبر است.",
+    "unauthorized": "⛔️ دسترسی فقط برای ادمین مجاز است.",
 }
 
 def tr(key: str) -> str:
     return STRINGS.get(key, key)
+
+def is_admin(update: Update) -> bool:
+    user = update.effective_user
+    return bool(user and user.id == ADMIN_CHAT_ID)
+
+async def deny_access(update: Update):
+    if update.callback_query:
+        await update.callback_query.answer(tr("unauthorized"), show_alert=True)
+    elif update.message:
+        await update.message.reply_text(tr("unauthorized"))
+
+def admin_only(handler):
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not is_admin(update):
+            await deny_access(update)
+            return ConversationHandler.END
+        return await handler(update, context)
+    return wrapper
 
 # ==================== HELPERS ====================
 def safe_bt(val) -> str:
@@ -1842,103 +1861,103 @@ def main():
     app.post_init = setup_bot_commands
     
     # Command handlers
-    app.add_handler(CommandHandler("add", cmd_add))
-    app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("backup", cmd_backup))
-    app.add_handler(CommandHandler("search", cmd_search))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-    app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("add", admin_only(cmd_add)))
+    app.add_handler(CommandHandler("list", admin_only(cmd_list)))
+    app.add_handler(CommandHandler("backup", admin_only(cmd_backup)))
+    app.add_handler(CommandHandler("search", admin_only(cmd_search)))
+    app.add_handler(CommandHandler("settings", admin_only(cmd_settings)))
+    app.add_handler(CommandHandler("help", admin_only(cmd_help)))
     
     # Conversation handler
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start_cmd)],
+        entry_points=[CommandHandler("start", admin_only(start_cmd))],
         states={
             MENU: [
-                CallbackQueryHandler(menu_add, pattern="^menu_add$"),
-                CallbackQueryHandler(menu_list, pattern="^menu_list$"),
-                CallbackQueryHandler(menu_settings, pattern="^menu_settings$"),
-                CallbackQueryHandler(go_home, pattern="^home$"),
-                CallbackQueryHandler(settings_types, pattern="^settings_types$"),
-                CallbackQueryHandler(settings_db, pattern="^settings_db$"),
-                CallbackQueryHandler(settings_texts, pattern="^settings_texts$"),
-                CallbackQueryHandler(db_backup, pattern="^db_backup$"),
-                CallbackQueryHandler(db_restore_prompt, pattern="^db_restore$"),
-                CallbackQueryHandler(types_add_prompt, pattern="^types_add$"),
-                CallbackQueryHandler(types_list, pattern=r"^types_list:\d+$"),
-                CallbackQueryHandler(types_edit_prompt, pattern=r"^types_edit:\d+:\d+$"),
-                CallbackQueryHandler(types_delete, pattern=r"^types_del:\d+:\d+$"),
-                CallbackQueryHandler(noop_type, pattern=r"^noop_type:\d+$"),
-                CallbackQueryHandler(list_all_cb, pattern=r"^list_all:\d+$"),
-                CallbackQueryHandler(list_type_cb, pattern=r"^list_type:\d+:\d+$"),
-                CallbackQueryHandler(info_handler, pattern=r"^info:\d+:.+"),
-                CallbackQueryHandler(renew_handler, pattern=r"^renew:\d+:.+"),
-                CallbackQueryHandler(delete_handler, pattern=r"^delete:\d+:.+"),
-                CallbackQueryHandler(edit_menu_handler, pattern=r"^edit_menu:\d+:.+"),
-                CallbackQueryHandler(edit_start_prompt, pattern=r"^edit_start:\d+:.+"),
-                CallbackQueryHandler(edit_duration_prompt, pattern=r"^edit_duration:\d+:.+"),
-                CallbackQueryHandler(edit_tg_prompt, pattern=r"^edit_tg:\d+:.+"),
-                CallbackQueryHandler(edit_login_prompt, pattern=r"^edit_login:\d+:.+"),
-                CallbackQueryHandler(edit_password_prompt, pattern=r"^edit_password:\d+:.+"),
-                CallbackQueryHandler(edit_description_prompt, pattern=r"^edit_description:\d+:.+"),
-                CallbackQueryHandler(texts_ready, pattern=r"^texts_ready:\d+:.+"),
-                CallbackQueryHandler(send_ready_text, pattern=r"^send_txt:.+"),
-                CallbackQueryHandler(text_edit_prompt, pattern=r"^txt_edit:.+"),
-                CallbackQueryHandler(cmd_search_callback, pattern="^cmd_search$"),
-                CallbackQueryHandler(cmd_help_inline, pattern="^cmd_help$"),
-                CallbackQueryHandler(noop_handler, pattern=r"^noop:\d+$"),
+                CallbackQueryHandler(admin_only(menu_add), pattern="^menu_add$"),
+                CallbackQueryHandler(admin_only(menu_list), pattern="^menu_list$"),
+                CallbackQueryHandler(admin_only(menu_settings), pattern="^menu_settings$"),
+                CallbackQueryHandler(admin_only(go_home), pattern="^home$"),
+                CallbackQueryHandler(admin_only(settings_types), pattern="^settings_types$"),
+                CallbackQueryHandler(admin_only(settings_db), pattern="^settings_db$"),
+                CallbackQueryHandler(admin_only(settings_texts), pattern="^settings_texts$"),
+                CallbackQueryHandler(admin_only(db_backup), pattern="^db_backup$"),
+                CallbackQueryHandler(admin_only(db_restore_prompt), pattern="^db_restore$"),
+                CallbackQueryHandler(admin_only(types_add_prompt), pattern="^types_add$"),
+                CallbackQueryHandler(admin_only(types_list), pattern=r"^types_list:\d+$"),
+                CallbackQueryHandler(admin_only(types_edit_prompt), pattern=r"^types_edit:\d+:\d+$"),
+                CallbackQueryHandler(admin_only(types_delete), pattern=r"^types_del:\d+:\d+$"),
+                CallbackQueryHandler(admin_only(noop_type), pattern=r"^noop_type:\d+$"),
+                CallbackQueryHandler(admin_only(list_all_cb), pattern=r"^list_all:\d+$"),
+                CallbackQueryHandler(admin_only(list_type_cb), pattern=r"^list_type:\d+:\d+$"),
+                CallbackQueryHandler(admin_only(info_handler), pattern=r"^info:\d+:.+"),
+                CallbackQueryHandler(admin_only(renew_handler), pattern=r"^renew:\d+:.+"),
+                CallbackQueryHandler(admin_only(delete_handler), pattern=r"^delete:\d+:.+"),
+                CallbackQueryHandler(admin_only(edit_menu_handler), pattern=r"^edit_menu:\d+:.+"),
+                CallbackQueryHandler(admin_only(edit_start_prompt), pattern=r"^edit_start:\d+:.+"),
+                CallbackQueryHandler(admin_only(edit_duration_prompt), pattern=r"^edit_duration:\d+:.+"),
+                CallbackQueryHandler(admin_only(edit_tg_prompt), pattern=r"^edit_tg:\d+:.+"),
+                CallbackQueryHandler(admin_only(edit_login_prompt), pattern=r"^edit_login:\d+:.+"),
+                CallbackQueryHandler(admin_only(edit_password_prompt), pattern=r"^edit_password:\d+:.+"),
+                CallbackQueryHandler(admin_only(edit_description_prompt), pattern=r"^edit_description:\d+:.+"),
+                CallbackQueryHandler(admin_only(texts_ready), pattern=r"^texts_ready:\d+:.+"),
+                CallbackQueryHandler(admin_only(send_ready_text), pattern=r"^send_txt:.+"),
+                CallbackQueryHandler(admin_only(text_edit_prompt), pattern=r"^txt_edit:.+"),
+                CallbackQueryHandler(admin_only(cmd_search_callback), pattern="^cmd_search$"),
+                CallbackQueryHandler(admin_only(cmd_help_inline), pattern="^cmd_help$"),
+                CallbackQueryHandler(admin_only(noop_handler), pattern=r"^noop:\d+$"),
             ],
             CHOOSING_TYPE: [
-                CallbackQueryHandler(type_pick, pattern=r"^type_pick:\d+$"),
-                CallbackQueryHandler(go_home, pattern="^home$"),
+                CallbackQueryHandler(admin_only(type_pick), pattern=r"^type_pick:\d+$"),
+                CallbackQueryHandler(admin_only(go_home), pattern="^home$"),
             ],
             START_CHOICE: [
-                CallbackQueryHandler(start_choice_cb, pattern=r"^start_"),
+                CallbackQueryHandler(admin_only(start_choice_cb), pattern=r"^start_"),
             ],
             START_GREGORIAN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, start_gregorian_msg),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(start_gregorian_msg)),
             ],
             START_JALALI: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, start_jalali_msg),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(start_jalali_msg)),
             ],
             DURATION_CHOICE: [
-                CallbackQueryHandler(duration_choice_cb, pattern=r"^dur_"),
+                CallbackQueryHandler(admin_only(duration_choice_cb), pattern=r"^dur_"),
             ],
             DURATION_MANUAL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, duration_manual_msg),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(duration_manual_msg)),
             ],
             BUYER_TG: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, buyer_tg_msg),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(buyer_tg_msg)),
             ],
             LOGIN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, login_msg),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(login_msg)),
             ],
             PASSWORD: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, password_msg),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(password_msg)),
             ],
             DESCRIPTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, description_msg),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(description_msg)),
             ],
             TYPES_ADD_WAIT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, types_add_receive),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(types_add_receive)),
             ],
             TYPES_EDIT_WAIT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, types_edit_receive),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(types_edit_receive)),
             ],
             WAIT_RESTORE_FILE: [
-                MessageHandler(filters.Document.ALL, db_restore_receive),
+                MessageHandler(filters.Document.ALL, admin_only(db_restore_receive)),
             ],
             WAIT_TEXT_EDIT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, text_edit_save),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(text_edit_save)),
             ],
             WAIT_EDIT_FIELD: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_save),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(edit_field_save)),
             ],
             WAIT_SEARCH_QUERY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_search_query),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_only(receive_search_query)),
             ],
         },
         fallbacks=[
-            CommandHandler("cancel", cancel_cmd),
+            CommandHandler("cancel", admin_only(cancel_cmd)),
         ],
         allow_reentry=True,
         per_message=False,
