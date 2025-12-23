@@ -50,7 +50,9 @@ PAGE_SIZE = 10
     START_JALALI,
     DURATION_CHOICE,
     DURATION_MANUAL,
-    BUYER_TG,
+    BUYER_ID_CHOICE,
+    BUYER_TG_USERNAME,
+    BUYER_TG_ID,
     LOGIN,
     PASSWORD,
     DESCRIPTION,
@@ -60,7 +62,7 @@ PAGE_SIZE = 10
     WAIT_TEXT_EDIT,
     WAIT_EDIT_FIELD,
     WAIT_SEARCH_QUERY,
-) = range(17)
+) = range(19)
 
 # ==================== STRINGS ====================
 STRINGS = {
@@ -82,7 +84,15 @@ STRINGS = {
     "dur_manual_ask": "✍️ مدت زمان را به روز وارد کن (فقط عدد).\nمثال: 45",
     "bad_number": "❌ فقط عدد بفرست. مثال: 45",
     "bad_range": "❌ عدد نامعتبره. (بین 1 تا 3650)",
-    "ask_tg": "👤 آیدی تلگرام را وارد کن (مثلاً @username):",
+    "ask_tg": "👤 نوع آیدی تلگرام کاربر را انتخاب کن:",
+    "ask_tg_username": "👤 یوزرنیم تلگرام را وارد کن (مثلاً @username):",
+    "ask_tg_id": (
+        "👤 آیدی عددی تلگرام را وارد کن:\n"
+        "مثال: 123456789\n\n"
+        "اگر یوزرنیم ندارد، از ربات @userinfobot آیدی عددی را بگیرید."
+    ),
+    "bad_tg_id": "❌ آیدی عددی نامعتبر است. فقط عدد بفرست.",
+    "bad_tg_username": "❌ یوزرنیم نامعتبر است. مثال: @username",
     "ask_login": "📧 یوزر/ایمیل را وارد کن:",
     "ask_password": "🔑 پسورد را وارد کن:",
     "ask_description": "📝 توضیحات بیشتر را وارد کن:",
@@ -90,6 +100,7 @@ STRINGS = {
     "expired_label": "منقضی",
     "today_label": "امروز",
     "more_info": "ℹ️ اطلاعات بیشتر",
+    "menu_my_accounts": "🧾 استعلام اکانت‌های من",
     "settings_title": "⚙️ تنظیمات ربات\nیکی از گزینه‌ها را انتخاب کن:",
     "settings_db": "🗄 دیتابیس",
     "settings_texts": "✍️ ویرایش متن‌ها",
@@ -123,6 +134,21 @@ def tr(key: str) -> str:
 # ==================== HELPERS ====================
 def safe_bt(val) -> str:
     return str(val).replace("`", "ˋ")
+
+def normalize_username(val: str) -> str:
+    if not val:
+        return ""
+    cleaned = val.strip()
+    if cleaned.startswith("@"):
+        cleaned = cleaned[1:]
+    return cleaned.strip()
+
+def format_buyer_display(username: str, buyer_id: str) -> str:
+    if username:
+        return f"@{username}"
+    if buyer_id:
+        return str(buyer_id)
+    return "-"
 
 def enc_cb(s: str) -> str:
     return base64.urlsafe_b64encode(s.encode("utf-8")).decode("ascii").rstrip("=")
@@ -180,6 +206,8 @@ def init_db():
         end_date TEXT NOT NULL,
         duration_days INTEGER NOT NULL,
         buyer_tg TEXT NOT NULL,
+        buyer_tg_username TEXT NOT NULL DEFAULT '',
+        buyer_tg_id TEXT NOT NULL DEFAULT '',
         login TEXT NOT NULL,
         password TEXT NOT NULL,
         description TEXT NOT NULL DEFAULT ''
@@ -204,6 +232,7 @@ def init_db():
     conn.close()
     init_default_texts()
     ensure_accounts_description_column()
+    ensure_accounts_buyer_columns()
 
 def ensure_accounts_description_column():
     conn = connect()
@@ -213,6 +242,34 @@ def ensure_accounts_description_column():
     if "description" not in columns:
         cur.execute("ALTER TABLE accounts ADD COLUMN description TEXT NOT NULL DEFAULT ''")
         conn.commit()
+    conn.close()
+
+def ensure_accounts_buyer_columns():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(accounts)")
+    columns = {row[1] for row in cur.fetchall()}
+    if "buyer_tg_username" not in columns:
+        cur.execute("ALTER TABLE accounts ADD COLUMN buyer_tg_username TEXT NOT NULL DEFAULT ''")
+    if "buyer_tg_id" not in columns:
+        cur.execute("ALTER TABLE accounts ADD COLUMN buyer_tg_id TEXT NOT NULL DEFAULT ''")
+    conn.commit()
+    cur.execute("SELECT id, buyer_tg, buyer_tg_username, buyer_tg_id FROM accounts")
+    rows = cur.fetchall()
+    for cid, buyer_tg, username, buyer_id in rows:
+        if username or buyer_id:
+            continue
+        buyer_tg = (buyer_tg or "").strip()
+        if buyer_tg.startswith("@"):
+            username = normalize_username(buyer_tg)
+        elif buyer_tg.isdigit():
+            buyer_id = buyer_tg
+        if username or buyer_id:
+            cur.execute(
+                "UPDATE accounts SET buyer_tg_username=?, buyer_tg_id=? WHERE id=?",
+                (username, buyer_id, cid),
+            )
+    conn.commit()
     conn.close()
 
 def init_default_texts():
@@ -340,10 +397,15 @@ def search_accounts(query: str):
         SELECT c.id, c.login, t.title, c.buyer_tg, c.end_date
         FROM accounts c
         JOIN account_types t ON t.id = c.account_type_id
-        WHERE c.login LIKE ? OR c.buyer_tg LIKE ? OR t.title LIKE ? OR c.description LIKE ?
+        WHERE c.login LIKE ?
+           OR c.buyer_tg LIKE ?
+           OR c.buyer_tg_username LIKE ?
+           OR c.buyer_tg_id LIKE ?
+           OR t.title LIKE ?
+           OR c.description LIKE ?
         ORDER BY c.end_date DESC
         LIMIT 50
-    """, (query_like, query_like, query_like, query_like))
+    """, (query_like, query_like, query_like, query_like, query_like, query_like))
     results = cur.fetchall()
     conn.close()
     return results
@@ -360,12 +422,66 @@ def get_accounts_count_by_type():
     conn.close()
     return results
 
+def get_accounts_for_user(user_id: int, username: str):
+    username_norm = normalize_username(username or "")
+    conn = connect()
+    cur = conn.cursor()
+    if username_norm:
+        cur.execute("""
+            SELECT c.id, c.login, c.end_date, t.title
+            FROM accounts c
+            JOIN account_types t ON t.id = c.account_type_id
+            WHERE c.buyer_tg_id = ? OR c.buyer_tg_username = ?
+            ORDER BY c.end_date ASC
+        """, (str(user_id), username_norm))
+    else:
+        cur.execute("""
+            SELECT c.id, c.login, c.end_date, t.title
+            FROM accounts c
+            JOIN account_types t ON t.id = c.account_type_id
+            WHERE c.buyer_tg_id = ?
+            ORDER BY c.end_date ASC
+        """, (str(user_id),))
+    results = cur.fetchall()
+    conn.close()
+    return results
+
+def get_account_user_text(cid: int):
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT t.title, c.start_date, c.end_date, c.duration_days,
+               c.login, c.description
+        FROM accounts c
+        JOIN account_types t ON t.id=c.account_type_id
+        WHERE c.id=?
+    """, (cid,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    type_title, start_date_s, end_date_s, duration_days, login, description = row
+    end_j = to_jalali_str(end_date_s)
+    rem = remaining_days(end_date_s)
+    rem_label = tr("expired_label") if rem < 0 else str(rem)
+    return (
+        f"✨ نوع اکانت: `{safe_bt(type_title)}`\n"
+        f"📅 شروع: `{safe_bt(start_date_s)}`\n"
+        f"⏳ مدت: `{safe_bt(duration_days)}`\n"
+        f"⌛️ مانده: `{safe_bt(rem_label)}`\n"
+        f"🧾 پایان میلادی: `{safe_bt(end_date_s)}`\n"
+        f"🗓 پایان شمسی: `{safe_bt(end_j)}`\n"
+        f"📧 یوزر/ایمیل: `{safe_bt(login)}`\n"
+        f"📝 توضیحات: `{safe_bt(description)}`"
+    )
+
 def get_account_full_text(cid: int):
     conn = connect()
     cur = conn.cursor()
     cur.execute("""
         SELECT t.title, c.start_date, c.end_date, c.duration_days,
-               c.buyer_tg, c.login, c.password, c.description
+               c.buyer_tg, c.buyer_tg_username, c.buyer_tg_id,
+               c.login, c.password, c.description
         FROM accounts c
         JOIN account_types t ON t.id=c.account_type_id
         WHERE c.id=?
@@ -376,10 +492,22 @@ def get_account_full_text(cid: int):
     if not row:
         return None
     
-    type_title, start_date_s, end_date_s, duration_days, buyer_tg, login, password, description = row
+    (
+        type_title,
+        start_date_s,
+        end_date_s,
+        duration_days,
+        buyer_tg,
+        buyer_tg_username,
+        buyer_tg_id,
+        login,
+        password,
+        description,
+    ) = row
     end_j = to_jalali_str(end_date_s)
     rem = remaining_days(end_date_s)
     rem_label = tr("expired_label") if rem < 0 else str(rem)
+    buyer_display = format_buyer_display(buyer_tg_username, buyer_tg_id) if (buyer_tg_username or buyer_tg_id) else buyer_tg
     
     return (
         f"✨ نوع اکانت: `{safe_bt(type_title)}`\n"
@@ -388,7 +516,7 @@ def get_account_full_text(cid: int):
         f"⌛️ مانده: `{safe_bt(rem_label)}`\n"
         f"🧾 پایان میلادی: `{safe_bt(end_date_s)}`\n"
         f"🗓 پایان شمسی: `{safe_bt(end_j)}`\n"
-        f"👤 تلگرام: {buyer_tg}\n"
+        f"👤 تلگرام: {buyer_display}\n"
         f"📧 یوزر/ایمیل: `{safe_bt(login)}`\n"
         f"🔑 پسورد: `{safe_bt(password)}`\n"
         f"📝 توضیحات: `{safe_bt(description)}`"
@@ -398,7 +526,9 @@ def render_template_for_account(key: str, cid: int):
     conn = connect()
     cur = conn.cursor()
     cur.execute("""
-        SELECT t.title, c.start_date, c.end_date, c.duration_days, c.buyer_tg, c.login, c.description
+        SELECT t.title, c.start_date, c.end_date, c.duration_days,
+               c.buyer_tg, c.buyer_tg_username, c.buyer_tg_id,
+               c.login, c.description
         FROM accounts c
         JOIN account_types t ON t.id=c.account_type_id
         WHERE c.id=?
@@ -409,12 +539,23 @@ def render_template_for_account(key: str, cid: int):
     if not row:
         return None
     
-    account_type, start_date_s, end_date_s, duration_days, buyer_tg, login, description = row
+    (
+        account_type,
+        start_date_s,
+        end_date_s,
+        duration_days,
+        buyer_tg,
+        buyer_tg_username,
+        buyer_tg_id,
+        login,
+        description,
+    ) = row
     days_left = remaining_days(end_date_s)
+    buyer_display = format_buyer_display(buyer_tg_username, buyer_tg_id) if (buyer_tg_username or buyer_tg_id) else buyer_tg
     
     tpl = get_bot_text(key)
     return tpl.format(
-        buyer_tg=buyer_tg,
+        buyer_tg=buyer_display,
         account_type=account_type,
         login=login,
         start_date=start_date_s,
@@ -440,6 +581,7 @@ def main_menu_kb():
             InlineKeyboardButton("🔍 جستجو", callback_data="cmd_search"),
             InlineKeyboardButton("📋 لیست اکانت‌ها", callback_data="menu_list"),
         ],
+        [InlineKeyboardButton(tr("menu_my_accounts"), callback_data="menu_my_accounts")],
         [
             InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
             InlineKeyboardButton("❓ راهنما", callback_data="cmd_help"),
@@ -495,6 +637,19 @@ def duration_kb():
         [InlineKeyboardButton(tr("dur_manual_btn"), callback_data="dur_manual")],
     ])
 
+def buyer_id_choice_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 یوزرنیم تلگرام", callback_data="buyer_username")],
+        [InlineKeyboardButton("🔢 آیدی عددی تلگرام", callback_data="buyer_id")],
+    ])
+
+def help_menu_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👥 راهنمای کاربران", callback_data="help_user")],
+        [InlineKeyboardButton("🛠 راهنمای ادمین", callback_data="help_admin")],
+        [InlineKeyboardButton("🏠 منو", callback_data="home")],
+    ])
+
 def list_filter_kb():
     types = get_types()
     rows = [[InlineKeyboardButton("📋 کلیه اکانت‌ها", callback_data="list_all:0")]]
@@ -524,7 +679,8 @@ def edit_menu_kb(cid: int, enc_back: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📅 ویرایش تاریخ شروع", callback_data=f"edit_start:{cid}:{enc_back}")],
         [InlineKeyboardButton("⏳ ویرایش مدت زمان", callback_data=f"edit_duration:{cid}:{enc_back}")],
-        [InlineKeyboardButton("👤 ویرایش تلگرام", callback_data=f"edit_tg:{cid}:{enc_back}")],
+        [InlineKeyboardButton("👤 ویرایش یوزرنیم تلگرام", callback_data=f"edit_tg_username:{cid}:{enc_back}")],
+        [InlineKeyboardButton("🔢 ویرایش آیدی عددی", callback_data=f"edit_tg_id:{cid}:{enc_back}")],
         [InlineKeyboardButton("📧 ویرایش یوزر/ایمیل", callback_data=f"edit_login:{cid}:{enc_back}")],
         [InlineKeyboardButton("🔑 ویرایش پسورد", callback_data=f"edit_password:{cid}:{enc_back}")],
         [InlineKeyboardButton("📝 ویرایش توضیحات", callback_data=f"edit_description:{cid}:{enc_back}")],
@@ -698,49 +854,7 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    
-    help_text = """
-📖 راهنمای کامل ExpiryHub
-
-━━━━━━━━━━━━━━━━━━
-📌 دستورات:
-
-/start - شروع ربات
-/add - افزودن اکانت
-/list - لیست اکانت‌ها
-/search - جستجوی اکانت
-/settings - تنظیمات
-/backup - بکاپ
-/help - راهنما
-/cancel - لغو
-
-━━━━━━━━━━━━━━━━━━
-✨ قابلیت‌ها:
-
-🗂 مدیریت کامل اکانت‌ها
-⏰ یادآوری خودکار
-📨 متن‌های آماده
-🔍 جستجوی پیشرفته
-📊 دسته‌بندی
-
-━━━━━━━━━━━━━━━━━━
-📞 پشتیبانی:
-
-توسعه‌دهنده: @EmadHabibnia
-کانال: @ExpiryHub
-━━━━━━━━━━━━━━━━━━
-"""
-    
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ افزودن اکانت", callback_data="menu_add")],
-        [
-            InlineKeyboardButton("🔍 جستجو", callback_data="cmd_search"),
-            InlineKeyboardButton("📋 لیست", callback_data="menu_list"),
-        ],
-        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="home")],
-    ])
-    
-    await update.message.reply_text(help_text, reply_markup=keyboard)
+    await update.message.reply_text("❓ راهنما\n\nیکی از گزینه‌ها را انتخاب کن:", reply_markup=help_menu_kb())
     return MENU
 
 # ==================== SEARCH ====================
@@ -839,27 +953,65 @@ async def menu_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(tr("settings_title"), reply_markup=settings_kb())
     return MENU
 
+async def menu_my_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data.clear()
+    user = q.from_user
+    accounts = get_accounts_for_user(user.id, user.username)
+    if not accounts:
+        await q.edit_message_text(
+            "❌ هیچ اکانتی برای شما ثبت نشده.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(tr("home"), callback_data="home")]]),
+        )
+        return MENU
+    kb_rows = []
+    for cid, login, end_date_s, type_title in accounts:
+        rem = remaining_days(end_date_s)
+        label = tr("expired_label") if rem < 0 else (tr("today_label") if rem == 0 else f"{rem}")
+        kb_rows.append([
+            InlineKeyboardButton(login, callback_data=f"user_info:{cid}"),
+            InlineKeyboardButton(type_title, callback_data=f"noop:{cid}"),
+            InlineKeyboardButton(label, callback_data=f"noop:{cid}"),
+        ])
+    kb_rows.append([InlineKeyboardButton(tr("home"), callback_data="home")])
+    await q.edit_message_text(
+        "🧾 لیست اکانت‌های شما\n\n"
+        "خانه اول: نام اکانت\n"
+        "خانه دوم: نوع اکانت\n"
+        "خانه سوم: زمان مانده (روز)",
+        reply_markup=InlineKeyboardMarkup(kb_rows),
+    )
+    return MENU
+
 async def cmd_help_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    
-    help_text = """
-📖 راهنما
+    await q.edit_message_text("❓ راهنما\n\nیکی از گزینه‌ها را انتخاب کن:", reply_markup=help_menu_kb())
+    return MENU
 
-━━━━━━━━━━━━━━━━━━
-/start - شروع
-/add - افزودن اکانت
-/list - لیست
-/search - جستجو
-/settings - تنظیمات
-/help - راهنما
+async def help_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    help_text = (
+        "👥 راهنمای کاربران\n\n"
+        "• از منوی «استعلام اکانت‌های من» لیست اکانت‌های ثبت شده را ببینید.\n"
+        "• برای دریافت پیام‌های یادآوری، حتماً آیدی عددی تلگرام را به ادمین بدهید.\n"
+        "• اگر یوزرنیم ندارید، از ربات @userinfobot آیدی عددی را بگیرید.\n"
+    )
+    await q.edit_message_text(help_text, reply_markup=help_menu_kb())
+    return MENU
 
-━━━━━━━━━━━━━━━━━━
-📞 @EmadHabibnia
-━━━━━━━━━━━━━━━━━━
-"""
-    
-    await q.edit_message_text(help_text, reply_markup=main_menu_kb())
+async def help_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    help_text = (
+        "🛠 راهنمای ادمین\n\n"
+        "• هنگام افزودن اکانت، نوع آیدی تلگرام را انتخاب کنید.\n"
+        "• برای ارسال یادآوری به کاربر، آیدی عددی الزامی است.\n"
+        "• اگر کاربر یوزرنیم ندارد، از او بخواهید آیدی عددی را از @userinfobot دریافت کند.\n"
+    )
+    await q.edit_message_text(help_text, reply_markup=help_menu_kb())
     return MENU
 
 async def cmd_types_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1337,8 +1489,8 @@ async def duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         context.user_data["duration_days"] = days
         context.user_data["end_date"] = compute_end_date(context.user_data["start_date"], days)
-        await q.edit_message_text(tr("ask_tg"))
-        return BUYER_TG
+        await q.edit_message_text(tr("ask_tg"), reply_markup=buyer_id_choice_kb())
+        return BUYER_ID_CHOICE
     
     if q.data == "dur_manual":
         await q.edit_message_text(tr("dur_manual_ask"))
@@ -1391,11 +1543,40 @@ async def duration_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     context.user_data["duration_days"] = days
     context.user_data["end_date"] = compute_end_date(context.user_data["start_date"], days)
-    await update.message.reply_text(tr("ask_tg"))
-    return BUYER_TG
+    await update.message.reply_text(tr("ask_tg"), reply_markup=buyer_id_choice_kb())
+    return BUYER_ID_CHOICE
 
-async def buyer_tg_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["buyer_tg"] = str(update.message.text).strip()
+async def buyer_id_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.data == "buyer_username":
+        await q.edit_message_text(tr("ask_tg_username"))
+        return BUYER_TG_USERNAME
+    if q.data == "buyer_id":
+        await q.edit_message_text(tr("ask_tg_id"))
+        return BUYER_TG_ID
+    await q.edit_message_text(tr("unknown"))
+    return BUYER_ID_CHOICE
+
+async def buyer_tg_username_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = normalize_username(update.message.text)
+    if not username or " " in username:
+        await update.message.reply_text(tr("bad_tg_username"))
+        return BUYER_TG_USERNAME
+    context.user_data["buyer_tg_username"] = username
+    context.user_data["buyer_tg_id"] = ""
+    context.user_data["buyer_tg"] = f"@{username}"
+    await update.message.reply_text(tr("ask_login"))
+    return LOGIN
+
+async def buyer_tg_id_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    buyer_id = update.message.text.strip()
+    if not buyer_id.isdigit():
+        await update.message.reply_text(tr("bad_tg_id"))
+        return BUYER_TG_ID
+    context.user_data["buyer_tg_id"] = buyer_id
+    context.user_data["buyer_tg_username"] = ""
+    context.user_data["buyer_tg"] = buyer_id
     await update.message.reply_text(tr("ask_login"))
     return LOGIN
 
@@ -1417,6 +1598,8 @@ async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     duration_days = int(context.user_data["duration_days"])
     end_date_s = context.user_data["end_date"]
     buyer_tg = context.user_data["buyer_tg"]
+    buyer_tg_username = context.user_data.get("buyer_tg_username", "")
+    buyer_tg_id = context.user_data.get("buyer_tg_id", "")
     login = context.user_data["login"]
     password = context.user_data["password"]
     description = context.user_data.get("description", "")
@@ -1426,12 +1609,14 @@ async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO accounts
-            (account_type_id, start_date, end_date, duration_days, buyer_tg, login, password, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (account_type_id, start_date, end_date, duration_days, buyer_tg, buyer_tg_username, buyer_tg_id,
+             login, password, description)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             int(context.user_data["account_type_id"]),
             start_date_s, end_date_s, duration_days,
-            buyer_tg, login, password, description,
+            buyer_tg, buyer_tg_username, buyer_tg_id,
+            login, password, description,
         ))
         conn.commit()
         conn.close()
@@ -1576,6 +1761,25 @@ async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MENU
     
     await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=info_actions_kb(cid, back_cb))
+    return MENU
+
+async def user_info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    _, cid_s = q.data.split(":", 1)
+    cid = int(cid_s)
+    msg = get_account_user_text(cid)
+    if not msg:
+        await q.answer("یافت نشد", show_alert=True)
+        return MENU
+    await q.message.reply_text(
+        msg,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⬅️ بازگشت", callback_data="menu_my_accounts")],
+            [InlineKeyboardButton(tr("home"), callback_data="home")],
+        ]),
+    )
     return MENU
 
 async def renew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1750,8 +1954,11 @@ async def edit_field_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     
     return WAIT_EDIT_FIELD
 
-async def edit_tg_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await edit_field_prompt(update, context, "buyer_tg", "👤 ویرایش تلگرام")
+async def edit_tg_username_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_prompt(update, context, "buyer_tg_username", "👤 ویرایش یوزرنیم تلگرام")
+
+async def edit_tg_id_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_prompt(update, context, "buyer_tg_id", "🔢 ویرایش آیدی عددی تلگرام")
 
 async def edit_login_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_prompt(update, context, "login", "📧 ویرایش یوزر/ایمیل")
@@ -1773,18 +1980,39 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     new_val = update.message.text.strip()
     
-    if field not in ("buyer_tg", "login", "password", "description"):
+    if field not in ("buyer_tg_username", "buyer_tg_id", "login", "password", "description"):
         await update.message.reply_text("❌ فیلد نامعتبر")
         return MENU
     
     conn = connect()
     cur = conn.cursor()
-    cur.execute(f"UPDATE accounts SET {field}=? WHERE id=?", (new_val, int(cid)))
+    if field == "buyer_tg_username":
+        username = normalize_username(new_val)
+        if not username or " " in username:
+            await update.message.reply_text(tr("bad_tg_username"))
+            conn.close()
+            return WAIT_EDIT_FIELD
+        cur.execute(
+            "UPDATE accounts SET buyer_tg_username=?, buyer_tg_id=?, buyer_tg=? WHERE id=?",
+            (username, "", f"@{username}", int(cid)),
+        )
+    elif field == "buyer_tg_id":
+        if not new_val.isdigit():
+            await update.message.reply_text(tr("bad_tg_id"))
+            conn.close()
+            return WAIT_EDIT_FIELD
+        cur.execute(
+            "UPDATE accounts SET buyer_tg_id=?, buyer_tg_username=?, buyer_tg=? WHERE id=?",
+            (new_val, "", new_val, int(cid)),
+        )
+    else:
+        cur.execute(f"UPDATE accounts SET {field}=? WHERE id=?", (new_val, int(cid)))
     conn.commit()
     conn.close()
     
     titles = {
-        "buyer_tg": "✅ تلگرام بروزرسانی شد",
+        "buyer_tg_username": "✅ یوزرنیم تلگرام بروزرسانی شد",
+        "buyer_tg_id": "✅ آیدی عددی بروزرسانی شد",
         "login": "✅ یوزر/ایمیل بروزرسانی شد",
         "password": "✅ پسورد بروزرسانی شد",
         "description": "✅ توضیحات بروزرسانی شد",
@@ -1804,11 +2032,11 @@ async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
     
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT c.id, c.end_date FROM accounts c")
+    cur.execute("SELECT c.id, c.end_date, c.buyer_tg_id FROM accounts c")
     rows = cur.fetchall()
     conn.close()
     
-    for cid, end_date_s in rows:
+    for cid, end_date_s, buyer_tg_id in rows:
         try:
             end_d = datetime.strptime(end_date_s, "%Y-%m-%d").date()
         except:
@@ -1824,6 +2052,12 @@ async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
                     text=text,
                     parse_mode=ParseMode.MARKDOWN
                 )
+                if buyer_tg_id:
+                    await context.bot.send_message(
+                        chat_id=int(buyer_tg_id),
+                        text=text,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
         
         if diff == 0:
             text = render_template_for_account("due_day", int(cid))
@@ -1833,6 +2067,12 @@ async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
                     text=text,
                     parse_mode=ParseMode.MARKDOWN
                 )
+                if buyer_tg_id:
+                    await context.bot.send_message(
+                        chat_id=int(buyer_tg_id),
+                        text=text,
+                        parse_mode=ParseMode.MARKDOWN
+                    )
 
 # ==================== MAIN ====================
 def main():
@@ -1857,6 +2097,7 @@ def main():
                 CallbackQueryHandler(menu_add, pattern="^menu_add$"),
                 CallbackQueryHandler(menu_list, pattern="^menu_list$"),
                 CallbackQueryHandler(menu_settings, pattern="^menu_settings$"),
+                CallbackQueryHandler(menu_my_accounts, pattern="^menu_my_accounts$"),
                 CallbackQueryHandler(go_home, pattern="^home$"),
                 CallbackQueryHandler(settings_types, pattern="^settings_types$"),
                 CallbackQueryHandler(settings_db, pattern="^settings_db$"),
@@ -1876,7 +2117,8 @@ def main():
                 CallbackQueryHandler(edit_menu_handler, pattern=r"^edit_menu:\d+:.+"),
                 CallbackQueryHandler(edit_start_prompt, pattern=r"^edit_start:\d+:.+"),
                 CallbackQueryHandler(edit_duration_prompt, pattern=r"^edit_duration:\d+:.+"),
-                CallbackQueryHandler(edit_tg_prompt, pattern=r"^edit_tg:\d+:.+"),
+                CallbackQueryHandler(edit_tg_username_prompt, pattern=r"^edit_tg_username:\d+:.+"),
+                CallbackQueryHandler(edit_tg_id_prompt, pattern=r"^edit_tg_id:\d+:.+"),
                 CallbackQueryHandler(edit_login_prompt, pattern=r"^edit_login:\d+:.+"),
                 CallbackQueryHandler(edit_password_prompt, pattern=r"^edit_password:\d+:.+"),
                 CallbackQueryHandler(edit_description_prompt, pattern=r"^edit_description:\d+:.+"),
@@ -1885,6 +2127,9 @@ def main():
                 CallbackQueryHandler(text_edit_prompt, pattern=r"^txt_edit:.+"),
                 CallbackQueryHandler(cmd_search_callback, pattern="^cmd_search$"),
                 CallbackQueryHandler(cmd_help_inline, pattern="^cmd_help$"),
+                CallbackQueryHandler(help_user, pattern="^help_user$"),
+                CallbackQueryHandler(help_admin, pattern="^help_admin$"),
+                CallbackQueryHandler(user_info_handler, pattern=r"^user_info:\d+$"),
                 CallbackQueryHandler(noop_handler, pattern=r"^noop:\d+$"),
             ],
             CHOOSING_TYPE: [
@@ -1906,8 +2151,14 @@ def main():
             DURATION_MANUAL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, duration_manual_msg),
             ],
-            BUYER_TG: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, buyer_tg_msg),
+            BUYER_ID_CHOICE: [
+                CallbackQueryHandler(buyer_id_choice_cb, pattern=r"^buyer_"),
+            ],
+            BUYER_TG_USERNAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, buyer_tg_username_msg),
+            ],
+            BUYER_TG_ID: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, buyer_tg_id_msg),
             ],
             LOGIN: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, login_msg),
