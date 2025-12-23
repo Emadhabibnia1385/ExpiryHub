@@ -9,6 +9,7 @@ import asyncio
 import os
 import sqlite3
 import base64
+import html
 from datetime import datetime, date, timedelta, time as dtime
 
 import jdatetime
@@ -1118,9 +1119,9 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current = get_bot_text(key)
     await q.edit_message_text(
         f"✏️ ویرایش متن ({key})\n\n"
-        f"متن فعلی:\n```{current}```\n\n"
+        f"متن فعلی:\n<pre>{html.escape(current)}</pre>\n\n"
         f"✍️ متن جدید را ارسال کن:",
-        parse_mode=ParseMode.MARKDOWN
+        parse_mode=ParseMode.HTML
     )
     return WAIT_TEXT_EDIT
 
