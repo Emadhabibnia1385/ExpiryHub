@@ -52,13 +52,14 @@ PAGE_SIZE = 10
     BUYER_TG,
     LOGIN,
     PASSWORD,
+    DESCRIPTION,
     TYPES_ADD_WAIT,
     TYPES_EDIT_WAIT,
     WAIT_RESTORE_FILE,
     WAIT_TEXT_EDIT,
     WAIT_EDIT_FIELD,
     WAIT_SEARCH_QUERY,
-) = range(16)
+) = range(17)
 
 # ==================== STRINGS ====================
 STRINGS = {
@@ -83,6 +84,7 @@ STRINGS = {
     "ask_tg": "👤 آیدی تلگرام را وارد کن (مثلاً @username):",
     "ask_login": "📧 یوزر/ایمیل را وارد کن:",
     "ask_password": "🔑 پسورد را وارد کن:",
+    "ask_description": "📝 توضیحات بیشتر را وارد کن:",
     "list_empty": "❌ هیچ اکانتی ثبت نشده.",
     "expired_label": "منقضی",
     "today_label": "امروز",
@@ -155,6 +157,12 @@ def start_text() -> str:
         "🛠 توسعه‌دهنده: @emadhabibnia"
     )
 
+def format_account_update_message(cid: int, title: str):
+    msg = get_account_full_text(cid)
+    if not msg:
+        return None
+    return f"{title}\n\n{msg}"
+
 # ==================== DATABASE ====================
 def connect():
     return sqlite3.connect(DB_PATH)
@@ -172,7 +180,8 @@ def init_db():
         duration_days INTEGER NOT NULL,
         buyer_tg TEXT NOT NULL,
         login TEXT NOT NULL,
-        password TEXT NOT NULL
+        password TEXT NOT NULL,
+        description TEXT NOT NULL DEFAULT ''
     )
     """)
     
@@ -193,6 +202,17 @@ def init_db():
     conn.commit()
     conn.close()
     init_default_texts()
+    ensure_accounts_description_column()
+
+def ensure_accounts_description_column():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(accounts)")
+    columns = {row[1] for row in cur.fetchall()}
+    if "description" not in columns:
+        cur.execute("ALTER TABLE accounts ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+    conn.close()
 
 def init_default_texts():
     defaults = {
@@ -201,6 +221,7 @@ def init_default_texts():
             "کاربر عزیز {buyer_tg}\n\n"
             "اکانت `{account_type}` شما با یوزر/ایمیل `{login}`\n"
             "تا `{days_left}` روز دیگر به پایان می‌رسد.\n\n"
+            "📝 توضیحات: `{description}`\n\n"
             "در صورت تمایل به تمدید، لطفاً اقدام کنید ✅"
         ),
         "due_day": (
@@ -208,6 +229,7 @@ def init_default_texts():
             "کاربر عزیز {buyer_tg}\n\n"
             "اکانت `{account_type}` شما با یوزر/ایمیل `{login}`\n"
             "امروز به پایان رسیده است.\n\n"
+            "📝 توضیحات: `{description}`\n\n"
             "🏦 نام بانک: {bank_name}\n"
             "💳 شماره کارت: {card_number}\n"
             "👤 به نام: {card_owner}"
@@ -219,7 +241,8 @@ def init_default_texts():
             "⏳ مدت: `{duration_days}`\n"
             "🧾 پایان میلادی: `{end_date}`\n"
             "🗓 پایان شمسی: `{end_date_jalali}`\n"
-            "⌛️ مانده: `{days_left}` روز"
+            "⌛️ مانده: `{days_left}` روز\n\n"
+            "📝 توضیحات: `{description}`"
         ),
         "bank_name": "نام بانک",
         "card_number": "0000-0000-0000-0000",
@@ -316,10 +339,10 @@ def search_accounts(query: str):
         SELECT c.id, c.login, t.title, c.buyer_tg, c.end_date
         FROM accounts c
         JOIN account_types t ON t.id = c.account_type_id
-        WHERE c.login LIKE ? OR c.buyer_tg LIKE ? OR t.title LIKE ?
+        WHERE c.login LIKE ? OR c.buyer_tg LIKE ? OR t.title LIKE ? OR c.description LIKE ?
         ORDER BY c.end_date DESC
         LIMIT 50
-    """, (query_like, query_like, query_like))
+    """, (query_like, query_like, query_like, query_like))
     results = cur.fetchall()
     conn.close()
     return results
@@ -341,7 +364,7 @@ def get_account_full_text(cid: int):
     cur = conn.cursor()
     cur.execute("""
         SELECT t.title, c.start_date, c.end_date, c.duration_days,
-               c.buyer_tg, c.login, c.password
+               c.buyer_tg, c.login, c.password, c.description
         FROM accounts c
         JOIN account_types t ON t.id=c.account_type_id
         WHERE c.id=?
@@ -352,7 +375,7 @@ def get_account_full_text(cid: int):
     if not row:
         return None
     
-    type_title, start_date_s, end_date_s, duration_days, buyer_tg, login, password = row
+    type_title, start_date_s, end_date_s, duration_days, buyer_tg, login, password, description = row
     end_j = to_jalali_str(end_date_s)
     rem = remaining_days(end_date_s)
     rem_label = tr("expired_label") if rem < 0 else str(rem)
@@ -366,14 +389,15 @@ def get_account_full_text(cid: int):
         f"🗓 پایان شمسی: `{safe_bt(end_j)}`\n"
         f"👤 تلگرام: {buyer_tg}\n"
         f"📧 یوزر/ایمیل: `{safe_bt(login)}`\n"
-        f"🔑 پسورد: `{safe_bt(password)}`"
+        f"🔑 پسورد: `{safe_bt(password)}`\n"
+        f"📝 توضیحات: `{safe_bt(description)}`"
     )
 
 def render_template_for_account(key: str, cid: int):
     conn = connect()
     cur = conn.cursor()
     cur.execute("""
-        SELECT t.title, c.start_date, c.end_date, c.duration_days, c.buyer_tg, c.login
+        SELECT t.title, c.start_date, c.end_date, c.duration_days, c.buyer_tg, c.login, c.description
         FROM accounts c
         JOIN account_types t ON t.id=c.account_type_id
         WHERE c.id=?
@@ -384,7 +408,7 @@ def render_template_for_account(key: str, cid: int):
     if not row:
         return None
     
-    account_type, start_date_s, end_date_s, duration_days, buyer_tg, login = row
+    account_type, start_date_s, end_date_s, duration_days, buyer_tg, login, description = row
     days_left = remaining_days(end_date_s)
     
     tpl = get_bot_text(key)
@@ -397,6 +421,7 @@ def render_template_for_account(key: str, cid: int):
         end_date_jalali=to_jalali_str(end_date_s),
         duration_days=duration_days,
         days_left=days_left,
+        description=description,
         bank_name=get_bot_text("bank_name"),
         card_number=get_bot_text("card_number"),
         card_owner=get_bot_text("card_owner"),
@@ -501,6 +526,7 @@ def edit_menu_kb(cid: int, enc_back: str):
         [InlineKeyboardButton("👤 ویرایش تلگرام", callback_data=f"edit_tg:{cid}:{enc_back}")],
         [InlineKeyboardButton("📧 ویرایش یوزر/ایمیل", callback_data=f"edit_login:{cid}:{enc_back}")],
         [InlineKeyboardButton("🔑 ویرایش پسورد", callback_data=f"edit_password:{cid}:{enc_back}")],
+        [InlineKeyboardButton("📝 ویرایش توضیحات", callback_data=f"edit_description:{cid}:{enc_back}")],
         [InlineKeyboardButton("⬅️ بازگشت", callback_data=f"info:{cid}:{enc_back}")],
     ])
 
@@ -517,9 +543,6 @@ def texts_kb():
         [InlineKeyboardButton("✏️ متن یادآوری ۲ روز", callback_data="txt_edit:reminder_2days")],
         [InlineKeyboardButton("✏️ متن روز سررسید", callback_data="txt_edit:due_day")],
         [InlineKeyboardButton("✏️ متن استعلام", callback_data="txt_edit:inquiry")],
-        [InlineKeyboardButton("🏦 نام بانک", callback_data="txt_edit:bank_name")],
-        [InlineKeyboardButton("💳 شماره کارت", callback_data="txt_edit:card_number")],
-        [InlineKeyboardButton("👤 نام صاحب", callback_data="txt_edit:card_owner")],
         [InlineKeyboardButton("🏠 منو", callback_data="home")],
     ])
 
@@ -540,7 +563,6 @@ async def setup_bot_commands(app):
         BotCommand("add", "افزودن اکانت"),
         BotCommand("list", "لیست اکانت‌ها"),
         BotCommand("search", "جستجوی اکانت"),
-        BotCommand("addtype", "افزودن نوع اکانت"),
         BotCommand("settings", "تنظیمات"),
         BotCommand("backup", "بکاپ"),
         BotCommand("help", "راهنما"),
@@ -627,7 +649,8 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "یکی از موارد زیر را جستجو کنید:\n"
         "• نام کاربری تلگرام (مثال: @username)\n"
         "• یوزر/ایمیل اکانت\n"
-        "• نوع اکانت\n\n"
+        "• نوع اکانت\n"
+        "• توضیحات اکانت\n\n"
         "✍️ متن جستجو را وارد کنید:",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("❌ لغو", callback_data="home")]
@@ -641,7 +664,7 @@ async def cmd_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not types:
         await update.message.reply_text(
-            "❌ هیچ نوع اکانتی ثبت نشده.\n/addtype",
+            "❌ هیچ نوع اکانتی ثبت نشده.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("➕ افزودن", callback_data="types_add")],
                 [InlineKeyboardButton("🏠 منو", callback_data="home")]
@@ -685,7 +708,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /add - افزودن اکانت
 /list - لیست اکانت‌ها
 /search - جستجوی اکانت
-/addtype - افزودن نوع اکانت
 /settings - تنظیمات
 /backup - بکاپ
 /help - راهنما
@@ -727,7 +749,12 @@ async def cmd_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.clear()
     await q.edit_message_text(
         "🔍 جستجوی اکانت\n\n"
-        "متن جستجو را وارد کنید:"
+        "یکی از موارد زیر را جستجو کنید:\n"
+        "• نام کاربری تلگرام (مثال: @username)\n"
+        "• یوزر/ایمیل اکانت\n"
+        "• نوع اکانت\n"
+        "• توضیحات اکانت\n\n"
+        "✍️ متن جستجو را وارد کنید:"
     )
     return WAIT_SEARCH_QUERY
 
@@ -1153,8 +1180,11 @@ async def start_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("UPDATE accounts SET start_date=?, end_date=? WHERE id=?", (new_start, new_end, cid))
             conn.commit()
             conn.close()
-            
-            msg = get_account_full_text(cid) or "✅ بروزرسانی شد"
+
+            msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد")
+            if not msg:
+                await q.message.reply_text("❌ اکانت پیدا نشد")
+                return MENU
             await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
             context.user_data.clear()
             return MENU
@@ -1200,9 +1230,14 @@ async def start_gregorian_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         cur.execute("UPDATE accounts SET start_date=?, end_date=? WHERE id=?", (text, new_end, cid))
         conn.commit()
         conn.close()
-        
+
+        msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد")
+        if not msg:
+            await update.message.reply_text("❌ اکانت پیدا نشد")
+            return MENU
         await update.message.reply_text(
-            "✅ تاریخ شروع بروزرسانی شد",
+            msg,
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=back_to_config_kb(cid, enc_back)
         )
         context.user_data.clear()
@@ -1241,9 +1276,14 @@ async def start_jalali_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur.execute("UPDATE accounts SET start_date=?, end_date=? WHERE id=?", (new_start, new_end, cid))
         conn.commit()
         conn.close()
-        
+
+        msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد")
+        if not msg:
+            await update.message.reply_text("❌ اکانت پیدا نشد")
+            return MENU
         await update.message.reply_text(
-            "✅ تاریخ شروع بروزرسانی شد",
+            msg,
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=back_to_config_kb(cid, enc_back)
         )
         context.user_data.clear()
@@ -1281,9 +1321,14 @@ async def duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
             cur.execute("UPDATE accounts SET duration_days=?, end_date=? WHERE id=?", (days, new_end, cid))
             conn.commit()
             conn.close()
-            
+
+            msg = format_account_update_message(cid, "✅ مدت زمان بروزرسانی شد")
+            if not msg:
+                await q.message.reply_text("❌ اکانت پیدا نشد")
+                return MENU
             await q.message.reply_text(
-                "✅ مدت زمان بروزرسانی شد",
+                msg,
+                parse_mode=ParseMode.MARKDOWN,
                 reply_markup=back_to_config_kb(cid, enc_back)
             )
             context.user_data.clear()
@@ -1330,9 +1375,14 @@ async def duration_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         cur.execute("UPDATE accounts SET duration_days=?, end_date=? WHERE id=?", (days, new_end, cid))
         conn.commit()
         conn.close()
-        
+
+        msg = format_account_update_message(cid, "✅ مدت زمان بروزرسانی شد")
+        if not msg:
+            await update.message.reply_text("❌ اکانت پیدا نشد")
+            return MENU
         await update.message.reply_text(
-            "✅ مدت زمان بروزرسانی شد",
+            msg,
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=back_to_config_kb(cid, enc_back)
         )
         context.user_data.clear()
@@ -1355,7 +1405,12 @@ async def login_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def password_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["password"] = str(update.message.text).strip()
-    
+    await update.message.reply_text(tr("ask_description"))
+    return DESCRIPTION
+
+async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["description"] = str(update.message.text).strip()
+
     type_title = context.user_data["account_type_title"]
     start_date_s = context.user_data["start_date"]
     duration_days = int(context.user_data["duration_days"])
@@ -1363,25 +1418,26 @@ async def password_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buyer_tg = context.user_data["buyer_tg"]
     login = context.user_data["login"]
     password = context.user_data["password"]
-    
+    description = context.user_data.get("description", "")
+
     try:
         conn = connect()
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO accounts
-            (account_type_id, start_date, end_date, duration_days, buyer_tg, login, password)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (account_type_id, start_date, end_date, duration_days, buyer_tg, login, password, description)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             int(context.user_data["account_type_id"]),
             start_date_s, end_date_s, duration_days,
-            buyer_tg, login, password,
+            buyer_tg, login, password, description,
         ))
         conn.commit()
         conn.close()
     except Exception as e:
         await update.message.reply_text("❌ خطا در ذخیره‌سازی")
         return MENU
-    
+
     end_j = to_jalali_str(end_date_s)
     msg = (
         "✅ اکانت اضافه شد\n\n"
@@ -1392,7 +1448,8 @@ async def password_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗓 پایان شمسی: `{safe_bt(end_j)}`\n"
         f"👤 تلگرام: {buyer_tg}\n"
         f"📧 یوزر: `{safe_bt(login)}`\n"
-        f"🔑 پسورد: `{safe_bt(password)}`"
+        f"🔑 پسورد: `{safe_bt(password)}`\n"
+        f"📝 توضیحات: `{safe_bt(description)}`"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=main_menu_kb())
     context.user_data.clear()
@@ -1486,7 +1543,16 @@ async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
     kb_rows.append([InlineKeyboardButton(tr("home"), callback_data="home")])
     
     title = "📋 کلیه اکانت‌ها" if type_id is None else f"📋 {type_title_by_id(type_id) or '-'}"
-    header = f"{title}\n\nصفحه {page+1} از {total_pages}"
+    header = (
+        f"{title}\n\n"
+        "اکانت‌ها بر اساس نزدیک‌ترین تاریخ پایان،\n"
+        "از بالا به پایین مرتب شده‌اند ⏳\n\n"
+        "اکانت‌هایی که تاریخ آن‌ها به پایان رسیده،\n"
+        "در انتهای لیست با وضعیت «منقضی» نمایش داده می‌شوند.\n\n"
+        "برای مشاهده جزئیات هر اکانت،\n"
+        "روی گزینه «ℹ️ اطلاعات بیشتر» کلیک کنید 👇\n\n"
+        f"صفحه {page+1} از {total_pages}"
+    )
     
     await q.edit_message_text(header, reply_markup=InlineKeyboardMarkup(kb_rows))
     return MENU
@@ -1522,7 +1588,7 @@ async def renew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn = connect()
     cur = conn.cursor()
     cur.execute("""
-        SELECT c.account_type_id, c.duration_days, c.buyer_tg, c.login, c.password
+        SELECT c.account_type_id, c.duration_days, c.buyer_tg, c.login, c.password, c.description
         FROM accounts c WHERE c.id=?
     """, (cid,))
     row = cur.fetchone()
@@ -1532,7 +1598,7 @@ async def renew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("یافت نشد", show_alert=True)
         return MENU
     
-    account_type_id, duration_days, buyer_tg, login, password = row
+    account_type_id, duration_days, buyer_tg, login, password, description = row
     type_title = type_title_by_id(int(account_type_id)) or "نامشخص"
     
     new_start = date.today().strftime("%Y-%m-%d")
@@ -1552,7 +1618,8 @@ async def renew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗓 پایان شمسی: `{safe_bt(end_j)}`\n"
         f"👤 تلگرام: {buyer_tg}\n"
         f"📧 یوزر: `{safe_bt(login)}`\n"
-        f"🔑 پسورد: `{safe_bt(password)}`"
+        f"🔑 پسورد: `{safe_bt(password)}`\n"
+        f"📝 توضیحات: `{safe_bt(description)}`"
     )
     
     await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_list_kb(back_cb))
@@ -1691,6 +1758,9 @@ async def edit_login_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def edit_password_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_prompt(update, context, "password", "🔑 ویرایش پسورد")
 
+async def edit_description_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    return await edit_field_prompt(update, context, "description", "📝 ویرایش توضیحات")
+
 async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     field = context.user_data.get("edit_field")
     cid = context.user_data.get("edit_cid")
@@ -1702,7 +1772,7 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     new_val = update.message.text.strip()
     
-    if field not in ("buyer_tg", "login", "password"):
+    if field not in ("buyer_tg", "login", "password", "description"):
         await update.message.reply_text("❌ فیلد نامعتبر")
         return MENU
     
@@ -1712,7 +1782,13 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
     
-    msg = get_account_full_text(int(cid))
+    titles = {
+        "buyer_tg": "✅ تلگرام بروزرسانی شد",
+        "login": "✅ یوزر/ایمیل بروزرسانی شد",
+        "password": "✅ پسورد بروزرسانی شد",
+        "description": "✅ توضیحات بروزرسانی شد",
+    }
+    msg = format_account_update_message(int(cid), titles.get(field, "✅ بروزرسانی شد"))
     if not msg:
         await update.message.reply_text("❌ اکانت پیدا نشد")
         return MENU
@@ -1767,7 +1843,6 @@ def main():
     # Command handlers
     app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("addtype", cmd_addtype))
     app.add_handler(CommandHandler("backup", cmd_backup))
     app.add_handler(CommandHandler("search", cmd_search))
     app.add_handler(CommandHandler("settings", cmd_settings))
@@ -1803,6 +1878,7 @@ def main():
                 CallbackQueryHandler(edit_tg_prompt, pattern=r"^edit_tg:\d+:.+"),
                 CallbackQueryHandler(edit_login_prompt, pattern=r"^edit_login:\d+:.+"),
                 CallbackQueryHandler(edit_password_prompt, pattern=r"^edit_password:\d+:.+"),
+                CallbackQueryHandler(edit_description_prompt, pattern=r"^edit_description:\d+:.+"),
                 CallbackQueryHandler(texts_ready, pattern=r"^texts_ready:\d+:.+"),
                 CallbackQueryHandler(send_ready_text, pattern=r"^send_txt:.+"),
                 CallbackQueryHandler(text_edit_prompt, pattern=r"^txt_edit:.+"),
@@ -1837,6 +1913,9 @@ def main():
             ],
             PASSWORD: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, password_msg),
+            ],
+            DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, description_msg),
             ],
             TYPES_ADD_WAIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, types_add_receive),
