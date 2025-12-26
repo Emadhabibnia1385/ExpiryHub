@@ -830,6 +830,18 @@ async def cmd_help_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(help_text, reply_markup=main_menu_kb())
     return MENU
 
+async def handle_invalid_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """هندل کردن دکمه‌هایی که دیتای آن‌ها منقضی شده یا ربات ریستارت شده"""
+    msg = (
+        "⚠️ عملیات نامعتبر است یا جلسه‌ی شما به پایان رسیده.\n"
+        "لطفاً ابتدا دستور /start را بزنید تا منو تازه شود."
+    )
+    if update.callback_query:
+        await update.callback_query.answer(msg, show_alert=True)
+    else:
+        await update.message.reply_text(msg)
+    return MENU
+
 # ==================== SETTINGS ====================
 async def settings_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1050,18 +1062,18 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["edit_text_key"] = key
     
-    # متغیرهای راهنما
+    # متغیرهای راهنما با خاصیت کپی شدن (تگ code)
     help_vars = (
-        "💡 متغیرهای مجاز (کپی و در متن استفاده کنید):\n"
-        "• `{buyer_tg}` : نام/آیدی خریدار\n"
-        "• `{account_type}` : نوع اکانت\n"
-        "• `{login}` : یوزر/ایمیل\n"
-        "• `{start_date}` : شروع میلادی\n"
-        "• `{end_date}` : پایان میلادی\n"
-        "• `{end_date_jalali}` : پایان شمسی\n"
-        "• `{duration_days}` : مدت اکانت\n"
-        "• `{days_left}` : روزهای مانده\n"
-        "• `{description}` : توضیحات\n"
+        "💡 متغیرهای مجاز (برای کپی، روی آن‌ها بزنید):\n"
+        "• <code>{buyer_tg}</code> : نام/آیدی خریدار\n"
+        "• <code>{account_type}</code> : نوع اکانت\n"
+        "• <code>{login}</code> : یوزر/ایمیل\n"
+        "• <code>{start_date}</code> : شروع میلادی\n"
+        "• <code>{end_date}</code> : پایان میلادی\n"
+        "• <code>{end_date_jalali}</code> : پایان شمسی\n"
+        "• <code>{duration_days}</code> : مدت اکانت\n"
+        "• <code>{days_left}</code> : روزهای مانده\n"
+        "• <code>{description}</code> : توضیحات\n"
     )
     
     current = get_bot_text(key)
@@ -1070,7 +1082,7 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{help_vars}\n"
         f"✍️ متن جدید را ارسال کن:\n\n"
         f"متن فعلی:\n<pre>{html.escape(current)}</pre>",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML # استفاده از HTML برای قابلیت کپی
     )
     return WAIT_TEXT_EDIT
 
@@ -1801,22 +1813,21 @@ async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== MAIN ====================
 def main():
-    init_db()
+     init_db()
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.post_init = setup_bot_commands
     
-    # Command handlers
-    app.add_handler(CommandHandler("add", cmd_add))
-    app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("backup", cmd_backup))
-    app.add_handler(CommandHandler("search", cmd_search))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-    app.add_handler(CommandHandler("help", cmd_help))
-    
-    # Conversation handler
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start_cmd)],
+        entry_points=[
+            CommandHandler("start", start_cmd),
+            CommandHandler("add", cmd_add),
+            CommandHandler("list", cmd_list),
+            CommandHandler("search", cmd_search),
+            CommandHandler("settings", cmd_settings),
+            CommandHandler("help", cmd_help),
+            CommandHandler("backup", cmd_backup),
+        ],
         states={
             MENU: [
                 CallbackQueryHandler(menu_add, pattern="^menu_add$"),
@@ -1908,13 +1919,14 @@ def main():
         },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
+            MessageHandler(filters.COMMAND, start_cmd) 
         ],
         allow_reentry=True,
         per_message=False,
     )
     
     app.add_handler(conv)
-    
+    app.add_handler(MessageHandler(filters.ALL, handle_invalid_button))
     # Setup reminders
     if app.job_queue:
         app.job_queue.run_daily(
@@ -1935,3 +1947,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
