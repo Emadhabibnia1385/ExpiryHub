@@ -26,11 +26,11 @@ from telegram.ext import (
 )
 
 # ==================== CONFIG ====================
-TOKEN = os.getenv("TOKEN", "").strip()
-ADMIN_CHAT_ID_RAW = os.getenv("ADMIN_CHAT_ID", "").strip()
+TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN").strip() # توکن را اینجا یا در .env قرار دهید
+ADMIN_CHAT_ID_RAW = os.getenv("ADMIN_CHAT_ID", "YOUR_ID").strip() # آیدی عددی ادمین
 
-if not TOKEN:
-    raise RuntimeError("TOKEN is not set. Set it in .env file")
+if not TOKEN or TOKEN == "YOUR_BOT_TOKEN":
+    raise RuntimeError("TOKEN is not set. Set it in code or .env file")
 
 try:
     ADMIN_CHAT_ID = int(ADMIN_CHAT_ID_RAW)
@@ -85,7 +85,7 @@ STRINGS = {
     "ask_tg": "👤 آیدی تلگرام را وارد کن (مثلاً @username):",
     "ask_login": "📧 یوزر/ایمیل را وارد کن:",
     "ask_password": "🔑 پسورد را وارد کن:",
-    "ask_description": "📝 توضیحات بیشتر را وارد کن:",
+    "ask_description": "📝 توضیحات اکانت را وارد کن (یا بنویس -):",
     "list_empty": "❌ هیچ اکانتی ثبت نشده.",
     "expired_label": "منقضی",
     "today_label": "امروز",
@@ -206,13 +206,17 @@ def init_db():
     ensure_accounts_description_column()
 
 def ensure_accounts_description_column():
+    """اگر ستون توضیحات وجود نداشته باشد (برای دیتابیس‌های قدیمی) آن را اضافه می‌کند"""
     conn = connect()
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(accounts)")
     columns = {row[1] for row in cur.fetchall()}
     if "description" not in columns:
-        cur.execute("ALTER TABLE accounts ADD COLUMN description TEXT NOT NULL DEFAULT ''")
-        conn.commit()
+        try:
+            cur.execute("ALTER TABLE accounts ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        except:
+            pass
     conn.close()
 
 def init_default_texts():
@@ -607,11 +611,6 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb())
     return MENU
 
-async def cmd_addtype(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    await update.message.reply_text(tr("types_add_ask"))
-    return TYPES_ADD_WAIT
-
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(DB_PATH):
         await update.message.reply_text(tr("db_restore_bad"))
@@ -658,38 +657,6 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
     )
     return WAIT_SEARCH_QUERY
-
-async def cmd_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    types = get_types()
-    
-    if not types:
-        await update.message.reply_text(
-            "❌ هیچ نوع اکانتی ثبت نشده.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ افزودن", callback_data="types_add")],
-                [InlineKeyboardButton("🏠 منو", callback_data="home")]
-            ])
-        )
-        return MENU
-    
-    counts = get_accounts_count_by_type()
-    text = "🗂 لیست نوع اکانت‌ها\n\n"
-    buttons = []
-    
-    for tid, title in types:
-        count = counts.get(tid, 0)
-        text += f"• {title} ({count} اکانت)\n"
-        buttons.append([
-            InlineKeyboardButton(f"{title} ({count})", callback_data=f"list_type:{tid}:0")
-        ])
-    
-    text += f"\n📊 مجموع: {len(types)} نوع"
-    buttons.append([InlineKeyboardButton("➕ افزودن", callback_data="types_add")])
-    buttons.append([InlineKeyboardButton("🏠 منو", callback_data="home")])
-    
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
-    return MENU
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -860,40 +827,6 @@ async def cmd_help_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
     
     await q.edit_message_text(help_text, reply_markup=main_menu_kb())
-    return MENU
-
-async def cmd_types_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    context.user_data.clear()
-    
-    types = get_types()
-    if not types:
-        await q.edit_message_text(
-            "❌ هیچ نوع اکانتی وجود ندارد",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ افزودن", callback_data="types_add")],
-                [InlineKeyboardButton("🏠 منو", callback_data="home")]
-            ])
-        )
-        return MENU
-    
-    counts = get_accounts_count_by_type()
-    text = "🗂 لیست نوع اکانت‌ها\n\n"
-    buttons = []
-    
-    for tid, title in types:
-        count = counts.get(tid, 0)
-        text += f"• {title} ({count})\n"
-        buttons.append([
-            InlineKeyboardButton(f"{title} ({count})", callback_data=f"list_type:{tid}:0")
-        ])
-    
-    text += f"\n📊 مجموع: {len(types)} نوع"
-    buttons.append([InlineKeyboardButton("➕ افزودن", callback_data="types_add")])
-    buttons.append([InlineKeyboardButton("🏠 منو", callback_data="home")])
-    
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons))
     return MENU
 
 # ==================== SETTINGS ====================
