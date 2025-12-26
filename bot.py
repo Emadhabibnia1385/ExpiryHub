@@ -26,8 +26,8 @@ from telegram.ext import (
 )
 
 # ==================== CONFIG ====================
-TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN").strip() # توکن را اینجا یا در .env قرار دهید
-ADMIN_CHAT_ID_RAW = os.getenv("ADMIN_CHAT_ID", "YOUR_ID").strip() # آیدی عددی ادمین
+TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN").strip()
+ADMIN_CHAT_ID_RAW = os.getenv("ADMIN_CHAT_ID", "YOUR_ID").strip()
 
 if not TOKEN or TOKEN == "YOUR_BOT_TOKEN":
     raise RuntimeError("TOKEN is not set. Set it in code or .env file")
@@ -60,7 +60,8 @@ PAGE_SIZE = 10
     WAIT_TEXT_EDIT,
     WAIT_EDIT_FIELD,
     WAIT_SEARCH_QUERY,
-) = range(17)
+    WAIT_RENEW_DURATION, # استیت جدید برای تمدید
+) = range(18)
 
 # ==================== STRINGS ====================
 STRINGS = {
@@ -82,7 +83,7 @@ STRINGS = {
     "dur_manual_ask": "✍️ مدت زمان را به روز وارد کن (فقط عدد).\nمثال: 45",
     "bad_number": "❌ فقط عدد بفرست. مثال: 45",
     "bad_range": "❌ عدد نامعتبره. (بین 1 تا 3650)",
-    "ask_tg": "👤 آیدی تلگرام را وارد کن (مثلاً @username):",
+    "ask_tg": "👤 آیدی تلگرام را وارد کن (آیدی عددی یا @username):",
     "ask_login": "📧 یوزر/ایمیل را وارد کن:",
     "ask_password": "🔑 پسورد را وارد کن:",
     "ask_description": "📝 توضیحات اکانت را وارد کن (یا بنویس -):",
@@ -206,7 +207,6 @@ def init_db():
     ensure_accounts_description_column()
 
 def ensure_accounts_description_column():
-    """اگر ستون توضیحات وجود نداشته باشد (برای دیتابیس‌های قدیمی) آن را اضافه می‌کند"""
     conn = connect()
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(accounts)")
@@ -417,6 +417,7 @@ def render_template_for_account(key: str, cid: int):
     days_left = remaining_days(end_date_s)
     
     tpl = get_bot_text(key)
+    # اضافه کردن پارامترهای ایمن برای فرمت‌دهی
     return tpl.format(
         buyer_tg=buyer_tg,
         account_type=account_type,
@@ -516,7 +517,7 @@ def info_actions_kb(cid: int, back_cb: str):
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✏️ ویرایش", callback_data=f"edit_menu:{cid}:{b}"),
-            InlineKeyboardButton("✅ تمدید", callback_data=f"renew:{cid}:{b}"),
+            InlineKeyboardButton("✅ تمدید", callback_data=f"renew_prompt:{cid}:{b}"), # تغییر برای تمدید
             InlineKeyboardButton("🗑 حذف", callback_data=f"delete:{cid}:{b}"),
         ],
         [InlineKeyboardButton("📨 متن‌های آماده", callback_data=f"texts_ready:{cid}:{b}")],
@@ -718,7 +719,7 @@ async def cmd_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     await q.edit_message_text(
         "🔍 جستجوی اکانت\n\n"
         "یکی از موارد زیر را جستجو کنید:\n"
-        "• نام کاربری تلگرام (مثال: @username)\n"
+        "• آیدی عددی یا یوزرنیم تلگرام\n"
         "• یوزر/ایمیل اکانت\n"
         "• نوع اکانت\n"
         "• توضیحات اکانت\n\n"
@@ -760,7 +761,7 @@ async def receive_search_query(update: Update, context: ContextTypes.DEFAULT_TYP
     if len(results) > 10:
         text += f"⚠️ {len(results) - 10} نتیجه دیگر"
     
-    buttons.append([InlineKeyboardButton("🔍 جستجوی جدید", callback_data="cmd_search")])
+    buttons.append([InlineKeyboardButton("🔍 جستجو", callback_data="cmd_search")])
     buttons.append([InlineKeyboardButton("🏠 منو", callback_data="home")])
     
     await update.message.reply_text(
@@ -1049,11 +1050,26 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["edit_text_key"] = key
     
+    # متغیرهای راهنما
+    help_vars = (
+        "💡 متغیرهای مجاز (کپی و در متن استفاده کنید):\n"
+        "• `{buyer_tg}` : نام/آیدی خریدار\n"
+        "• `{account_type}` : نوع اکانت\n"
+        "• `{login}` : یوزر/ایمیل\n"
+        "• `{start_date}` : شروع میلادی\n"
+        "• `{end_date}` : پایان میلادی\n"
+        "• `{end_date_jalali}` : پایان شمسی\n"
+        "• `{duration_days}` : مدت اکانت\n"
+        "• `{days_left}` : روزهای مانده\n"
+        "• `{description}` : توضیحات\n"
+    )
+    
     current = get_bot_text(key)
     await q.edit_message_text(
         f"✏️ ویرایش متن ({key})\n\n"
-        f"متن فعلی:\n<pre>{html.escape(current)}</pre>\n\n"
-        f"✍️ متن جدید را ارسال کن:",
+        f"{help_vars}\n"
+        f"✍️ متن جدید را ارسال کن:\n\n"
+        f"متن فعلی:\n<pre>{html.escape(current)}</pre>",
         parse_mode=ParseMode.HTML
     )
     return WAIT_TEXT_EDIT
@@ -1389,6 +1405,70 @@ async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return MENU
 
+# ==================== RENEW LOGIC (NEW) ====================
+async def renew_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    
+    _, cid_s, enc_back = q.data.split(":", 2)
+    context.user_data["renew_cid"] = int(cid_s)
+    context.user_data["renew_enc_back"] = enc_back
+    
+    await q.edit_message_text(
+        "⏳ مدت زمان تمدید اکانت را انتخاب کن (روز):\n"
+        "تاریخ انقضا از امروز محاسبه خواهد شد.",
+        reply_markup=duration_kb()
+    )
+    return WAIT_RENEW_DURATION
+
+async def renew_duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    
+    cid = context.user_data.get("renew_cid")
+    enc_back = context.user_data.get("renew_enc_back")
+    mapping = {"dur_30": 30, "dur_90": 90, "dur_180": 180, "dur_365": 365}
+    
+    if q.data in mapping:
+        days = mapping[q.data]
+        return await perform_renew(update, context, cid, days, enc_back)
+    
+    if q.data == "dur_manual":
+        await q.edit_message_text("✍️ مدت زمان تمدید را به روز وارد کن (فقط عدد):")
+        return WAIT_RENEW_DURATION # استفاده از مسیج هندلر برای گرفتن عدد
+
+async def renew_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    if not text.isdigit():
+        await update.message.reply_text(tr("bad_number"))
+        return WAIT_RENEW_DURATION
+    
+    days = int(text)
+    cid = context.user_data.get("renew_cid")
+    enc_back = context.user_data.get("renew_enc_back")
+    
+    return await perform_renew(update, context, cid, days, enc_back)
+
+async def perform_renew(update: Update, context: ContextTypes.DEFAULT_TYPE, cid, days, enc_back):
+    new_start = date.today().strftime("%Y-%m-%d")
+    new_end = compute_end_date(new_start, days)
+    
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("UPDATE accounts SET start_date=?, end_date=?, duration_days=? WHERE id=?", (new_start, new_end, days, cid))
+    conn.commit()
+    conn.close()
+    
+    msg = format_account_update_message(cid, "✅ اکانت با موفقیت تمدید شد")
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
+    else:
+        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
+    
+    context.user_data.clear()
+    return MENU
+
 # ==================== LIST ACCOUNTS ====================
 async def list_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1509,54 +1589,6 @@ async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MENU
     
     await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=info_actions_kb(cid, back_cb))
-    return MENU
-
-async def renew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    
-    _, cid_s, enc_back = q.data.split(":", 2)
-    cid = int(cid_s)
-    back_cb = dec_cb(enc_back)
-    
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT c.account_type_id, c.duration_days, c.buyer_tg, c.login, c.password, c.description
-        FROM accounts c WHERE c.id=?
-    """, (cid,))
-    row = cur.fetchone()
-    
-    if not row:
-        conn.close()
-        await q.answer("یافت نشد", show_alert=True)
-        return MENU
-    
-    account_type_id, duration_days, buyer_tg, login, password, description = row
-    type_title = type_title_by_id(int(account_type_id)) or "نامشخص"
-    
-    new_start = date.today().strftime("%Y-%m-%d")
-    new_end = compute_end_date(new_start, int(duration_days))
-    
-    cur.execute("UPDATE accounts SET start_date=?, end_date=? WHERE id=?", (new_start, new_end, cid))
-    conn.commit()
-    conn.close()
-    
-    end_j = to_jalali_str(new_end)
-    msg = (
-        "✅ تمدید شد\n\n"
-        f"✨ نوع: `{safe_bt(type_title)}`\n"
-        f"📅 شروع: `{safe_bt(new_start)}`\n"
-        f"⏳ مدت: `{safe_bt(duration_days)}`\n"
-        f"🧾 پایان میلادی: `{safe_bt(new_end)}`\n"
-        f"🗓 پایان شمسی: `{safe_bt(end_j)}`\n"
-        f"👤 تلگرام: {buyer_tg}\n"
-        f"📧 یوزر: `{safe_bt(login)}`\n"
-        f"🔑 پسورد: `{safe_bt(password)}`\n"
-        f"📝 توضیحات: `{safe_bt(description)}`"
-    )
-    
-    await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_list_kb(back_cb))
     return MENU
 
 async def delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1684,7 +1716,7 @@ async def edit_field_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     return WAIT_EDIT_FIELD
 
 async def edit_tg_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await edit_field_prompt(update, context, "buyer_tg", "👤 ویرایش تلگرام")
+    return await edit_field_prompt(update, context, "buyer_tg", "👤 ویرایش تلگرام (آیدی عددی یا یوزرنیم)")
 
 async def edit_login_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_prompt(update, context, "login", "📧 ویرایش یوزر/ایمیل")
@@ -1804,7 +1836,7 @@ def main():
                 CallbackQueryHandler(list_all_cb, pattern=r"^list_all:\d+$"),
                 CallbackQueryHandler(list_type_cb, pattern=r"^list_type:\d+:\d+$"),
                 CallbackQueryHandler(info_handler, pattern=r"^info:\d+:.+"),
-                CallbackQueryHandler(renew_handler, pattern=r"^renew:\d+:.+"),
+                CallbackQueryHandler(renew_prompt, pattern=r"^renew_prompt:\d+:.+"), # هندلر جدید
                 CallbackQueryHandler(delete_handler, pattern=r"^delete:\d+:.+"),
                 CallbackQueryHandler(edit_menu_handler, pattern=r"^edit_menu:\d+:.+"),
                 CallbackQueryHandler(edit_start_prompt, pattern=r"^edit_start:\d+:.+"),
@@ -1868,6 +1900,10 @@ def main():
             ],
             WAIT_SEARCH_QUERY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_search_query),
+            ],
+            WAIT_RENEW_DURATION: [ # هندلرهای جدید تمدید
+                CallbackQueryHandler(renew_duration_choice_cb, pattern=r"^dur_"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, renew_manual_msg),
             ],
         },
         fallbacks=[
