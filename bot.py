@@ -13,7 +13,6 @@ import html
 from datetime import datetime, date, timedelta, time as dtime
 
 import jdatetime
-from functools import wraps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -118,14 +117,6 @@ STRINGS = {
     "back_filters": "⬅️ تغییر فیلتر",
     "unknown": "⚠️ ورودی نامعتبر است.",
 }
-
-def command_reset(func):
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        # این خط باعث می‌شود هر اطلاعاتی از قبل در حافظه موقت مانده پاک شود
-        context.user_data.clear()
-        return await func(update, context, *args, **kwargs)
-    return wrapper
 
 def tr(key: str) -> str:
     return STRINGS.get(key, key)
@@ -584,7 +575,6 @@ async def setup_bot_commands(app):
     ]
     await app.bot.set_my_commands(commands)
 
-@command_reset
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(start_text(), reply_markup=main_menu_kb())
@@ -602,7 +592,6 @@ async def go_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(start_text(), reply_markup=main_menu_kb())
     return MENU
 
-@command_reset
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     kb = type_pick_kb()
@@ -618,13 +607,11 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(tr("choose_type"), reply_markup=kb)
     return CHOOSING_TYPE
 
-@command_reset
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb())
     return MENU
 
-@command_reset
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(DB_PATH):
         await update.message.reply_text(tr("db_restore_bad"))
@@ -656,7 +643,6 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return MENU
 
-@command_reset
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(
@@ -673,13 +659,11 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return WAIT_SEARCH_QUERY
 
-@command_reset
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(tr("settings_title"), reply_markup=settings_kb())
     return MENU
 
-@command_reset
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     
@@ -1822,19 +1806,17 @@ def main():
     
     app.post_init = setup_bot_commands
     
+    # Command handlers
+    app.add_handler(CommandHandler("add", cmd_add))
+    app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("backup", cmd_backup))
+    app.add_handler(CommandHandler("search", cmd_search))
+    app.add_handler(CommandHandler("settings", cmd_settings))
+    app.add_handler(CommandHandler("help", cmd_help))
     
     # Conversation handler
     conv = ConversationHandler(
-        entry_points=[
-            
-            CommandHandler("start", start_cmd),
-            CommandHandler("add", cmd_add),
-            CommandHandler("list", cmd_list),
-            CommandHandler("backup", cmd_backup),
-            CommandHandler("search", cmd_search),
-            CommandHandler("settings", cmd_settings),
-            CommandHandler("help", cmd_help),
-        ],
+        entry_points=[CommandHandler("start", start_cmd)],
         states={
             MENU: [
                 CallbackQueryHandler(menu_add, pattern="^menu_add$"),
@@ -1854,7 +1836,7 @@ def main():
                 CallbackQueryHandler(list_all_cb, pattern=r"^list_all:\d+$"),
                 CallbackQueryHandler(list_type_cb, pattern=r"^list_type:\d+:\d+$"),
                 CallbackQueryHandler(info_handler, pattern=r"^info:\d+:.+"),
-                CallbackQueryHandler(renew_prompt, pattern=r"^renew_prompt:\d+:.+"),
+                CallbackQueryHandler(renew_prompt, pattern=r"^renew_prompt:\d+:.+"), # هندلر جدید
                 CallbackQueryHandler(delete_handler, pattern=r"^delete:\d+:.+"),
                 CallbackQueryHandler(edit_menu_handler, pattern=r"^edit_menu:\d+:.+"),
                 CallbackQueryHandler(edit_start_prompt, pattern=r"^edit_start:\d+:.+"),
@@ -1919,7 +1901,7 @@ def main():
             WAIT_SEARCH_QUERY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_search_query),
             ],
-            WAIT_RENEW_DURATION: [ 
+            WAIT_RENEW_DURATION: [ # هندلرهای جدید تمدید
                 CallbackQueryHandler(renew_duration_choice_cb, pattern=r"^dur_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, renew_manual_msg),
             ],
@@ -1927,7 +1909,7 @@ def main():
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
         ],
-        allow_reentry=True, 
+        allow_reentry=True,
         per_message=False,
     )
     
