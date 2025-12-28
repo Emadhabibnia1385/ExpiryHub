@@ -1053,6 +1053,7 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # متغیرهای راهنما
     help_vars = (
         "💡 متغیرهای مجاز (کپی و در متن استفاده کنید):\n"
+        "• `{buyer_tg}` : نام/آیدی خریدار\n"
         "• <code>{buyer_tg}</code> : نام/آیدی خریدار\n"
         "• <code>{account_type}</code> : نوع اکانت\n"
         "• <code>{login}</code> : یوزر/ایمیل\n"
@@ -1805,18 +1806,18 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
     
     app.post_init = setup_bot_commands
-    
-    # Command handlers
-    app.add_handler(CommandHandler("add", cmd_add))
-    app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("backup", cmd_backup))
-    app.add_handler(CommandHandler("search", cmd_search))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-    app.add_handler(CommandHandler("help", cmd_help))
-    
+      
     # Conversation handler
     conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start_cmd)],
+        entry_points=[
+            CommandHandler("start", start_cmd),
+            CommandHandler("add", cmd_add),      
+            CommandHandler("list", cmd_list),
+            CommandHandler("search", cmd_search),
+            CommandHandler("settings", cmd_settings),
+            CommandHandler("backup", cmd_backup),
+            CommandHandler("help", cmd_help),
+            ],
         states={
             MENU: [
                 CallbackQueryHandler(menu_add, pattern="^menu_add$"),
@@ -1860,7 +1861,10 @@ def main():
                 CallbackQueryHandler(start_choice_cb, pattern=r"^start_"),
             ],
             START_GREGORIAN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, start_gregorian_msg),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, start_gregorian_msg)
+            ],
+            DURATION_MANUAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, duration_manual_msg)
             ],
             START_JALALI: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, start_jalali_msg),
@@ -1935,4 +1939,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
