@@ -580,6 +580,20 @@ def user_start_text() -> str:
         "• راهنمای استفاده رو ببینید\n\n"
         "✅ به‌زودی بخش استعلام کامل فعال می‌شود."
     )
+def is_admin(update: Update) -> bool:
+    uid = update.effective_user.id if update.effective_user else None
+    return uid == ADMIN_CHAT_ID
+
+async def admin_only_cb(update: Update, message: str = "⛔️ فقط ادمین دسترسی دارد"):
+    """برای CallbackQuery ها"""
+    q = update.callback_query
+    if q:
+        await q.answer(message, show_alert=True)
+
+async def admin_only_msg(update: Update, message: str = "⛔️ فقط ادمین دسترسی دارد"):
+    """برای Message ها (کامندها)"""
+    if update.message:
+        await update.message.reply_text(message)
 
 # ==================== COMMANDS ====================
 async def setup_bot_commands(app):
@@ -629,6 +643,9 @@ async def go_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MENU
 
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     context.user_data.clear()
     kb = type_pick_kb()
     if kb is None:
@@ -644,11 +661,17 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CHOOSING_TYPE
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     context.user_data.clear()
     await update.message.reply_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb())
     return MENU
 
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     if not os.path.exists(DB_PATH):
         await update.message.reply_text(tr("db_restore_bad"))
         return MENU
@@ -680,6 +703,9 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return MENU
 
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     context.user_data.clear()
     await update.message.reply_text(
         "🔍 جستجوی اکانت\n\n"
@@ -696,6 +722,9 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WAIT_SEARCH_QUERY
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     context.user_data.clear()
     await update.message.reply_text(tr("settings_title"), reply_markup=settings_kb())
     return MENU
