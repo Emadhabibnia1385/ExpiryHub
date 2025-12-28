@@ -10,7 +10,6 @@ import os
 import sqlite3
 import base64
 import html
-from functools import wraps
 from datetime import datetime, date, timedelta, time as dtime
 
 import jdatetime
@@ -62,7 +61,7 @@ PAGE_SIZE = 10
     WAIT_TEXT_EDIT,
     WAIT_EDIT_FIELD,
     WAIT_SEARCH_QUERY,
-    WAIT_RENEW_DURATION,  # تمدید
+    WAIT_RENEW_DURATION, # استیت جدید برای تمدید
 ) = range(18)
 
 # ==================== STRINGS ====================
@@ -150,7 +149,7 @@ def to_jalali_str(gregorian_yyyy_mm_dd: str) -> str:
     j = jdatetime.date.fromgregorian(date=g)
     return f"{j.year:04d}-{j.month:02d}-{j.day:02d}"
 
-def start_text_admin() -> str:
+def start_text() -> str:
     return (
         "سلام 👋\n"
         "به ربات مدیریت تمدید اکانت‌ها خوش آمدید.\n\n"
@@ -161,104 +160,20 @@ def start_text_admin() -> str:
         "🛠 توسعه‌دهنده: @emadhabibnia"
     )
 
-def user_start_text() -> str:
-    return (
-        "سلام 👋\n"
-        "به ربات ExpiryHub خوش آمدید.\n\n"
-        "از طریق دکمه‌های زیر می‌تونید:\n"
-        "• وضعیت اکانت‌هاتون رو استعلام کنید\n"
-        "• راهنمای استفاده رو ببینید\n\n"
-        "✅ اگر اکانتی برای شما ثبت شده باشد، در بخش استعلام نمایش داده می‌شود."
-    )
-
 def format_account_update_message(cid: int, title: str):
     msg = get_account_full_text(cid)
     if not msg:
         return None
     return f"{title}\n\n{msg}"
 
-def is_admin(update: Update) -> bool:
-    uid = update.effective_user.id if update.effective_user else None
-    return uid == ADMIN_CHAT_ID
-
-async def admin_only_cb(update: Update, message: str = "⛔️ فقط ادمین دسترسی دارد"):
-    q = update.callback_query
-    if q:
-        await q.answer(message, show_alert=True)
-
-async def admin_only_msg(update: Update, message: str = "⛔️ فقط ادمین دسترسی دارد"):
-    if update.message:
-        await update.message.reply_text(message)
-
-def admin_required(func):
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        if not is_admin(update):
-            if update.callback_query:
-                await admin_only_cb(update)
-            else:
-                await admin_only_msg(update)
-            return MENU
-        return await func(update, context, *args, **kwargs)
-    return wrapper
-
 # ==================== DATABASE ====================
 def connect():
     return sqlite3.connect(DB_PATH)
 
-def init_users_table():
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS bot_users (
-            chat_id INTEGER PRIMARY KEY,
-            username TEXT,
-            updated_at TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-def upsert_bot_user(chat_id: int, username: str | None):
-    uname = (username or "").strip().lower()
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO bot_users(chat_id, username, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(chat_id) DO UPDATE SET
-            username=excluded.username,
-            updated_at=excluded.updated_at
-    """, (int(chat_id), uname, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
-
-def resolve_buyer_chat_id(buyer_tg: str):
-    s = (buyer_tg or "").strip()
-    if not s:
-        return None
-
-    if s.isdigit():
-        try:
-            return int(s)
-        except:
-            return None
-
-    uname = s.lower()
-    if uname.startswith("@"):
-        uname = uname[1:]
-
-    conn = connect()
-    cur = conn.cursor()
-    cur.execute("SELECT chat_id FROM bot_users WHERE username=?", (uname,))
-    row = cur.fetchone()
-    conn.close()
-    return int(row[0]) if row else None
-
 def init_db():
     conn = connect()
     cur = conn.cursor()
-
+    
     cur.execute("""
     CREATE TABLE IF NOT EXISTS accounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -272,27 +187,25 @@ def init_db():
         description TEXT NOT NULL DEFAULT ''
     )
     """)
-
+    
     cur.execute("""
     CREATE TABLE IF NOT EXISTS account_types (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL UNIQUE
     )
     """)
-
+    
     cur.execute("""
     CREATE TABLE IF NOT EXISTS bot_texts (
         key TEXT PRIMARY KEY,
         body TEXT NOT NULL
     )
     """)
-
+    
     conn.commit()
     conn.close()
-
     init_default_texts()
     ensure_accounts_description_column()
-    init_users_table()
 
 def ensure_accounts_description_column():
     conn = connect()
@@ -341,7 +254,7 @@ def init_default_texts():
         "card_number": "0000-0000-0000-0000",
         "card_owner": "نام صاحب کارت",
     }
-
+    
     conn = connect()
     cur = conn.cursor()
     for k, v in defaults.items():
@@ -360,11 +273,7 @@ def get_bot_text(key: str) -> str:
 def set_bot_text(key: str, body: str):
     conn = connect()
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO bot_texts(key, body) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET body=excluded.body",
-        (key, body)
-    )
+    cur.execute("INSERT INTO bot_texts(key, body) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET body=excluded.body", (key, body))
     conn.commit()
     conn.close()
 
@@ -444,6 +353,18 @@ def search_accounts(query: str):
     conn.close()
     return results
 
+def get_accounts_count_by_type():
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT account_type_id, COUNT(*) 
+        FROM accounts 
+        GROUP BY account_type_id
+    """)
+    results = {row[0]: row[1] for row in cur.fetchall()}
+    conn.close()
+    return results
+
 def get_account_full_text(cid: int):
     conn = connect()
     cur = conn.cursor()
@@ -456,15 +377,15 @@ def get_account_full_text(cid: int):
     """, (cid,))
     row = cur.fetchone()
     conn.close()
-
+    
     if not row:
         return None
-
+    
     type_title, start_date_s, end_date_s, duration_days, buyer_tg, login, password, description = row
     end_j = to_jalali_str(end_date_s)
     rem = remaining_days(end_date_s)
     rem_label = tr("expired_label") if rem < 0 else str(rem)
-
+    
     return (
         f"✨ نوع اکانت: `{safe_bt(type_title)}`\n"
         f"📅 شروع: `{safe_bt(start_date_s)}`\n"
@@ -489,14 +410,15 @@ def render_template_for_account(key: str, cid: int):
     """, (cid,))
     row = cur.fetchone()
     conn.close()
-
+    
     if not row:
         return None
-
+    
     account_type, start_date_s, end_date_s, duration_days, buyer_tg, login, description = row
     days_left = remaining_days(end_date_s)
-
+    
     tpl = get_bot_text(key)
+    # اضافه کردن پارامترهای ایمن برای فرمت‌دهی
     return tpl.format(
         buyer_tg=buyer_tg,
         account_type=account_type,
@@ -511,53 +433,6 @@ def render_template_for_account(key: str, cid: int):
         card_number=get_bot_text("card_number"),
         card_owner=get_bot_text("card_owner"),
     )
-
-# ==================== USER INQUIRY ====================
-def get_user_accounts_for_inquiry(user_id: int, username: str | None):
-    uid_s = str(user_id)
-    uname = (username or "").strip()
-    uname_at = ""
-    uname_lower_at = ""
-
-    if uname:
-        if not uname.startswith("@"):
-            uname_at = "@" + uname
-        else:
-            uname_at = uname
-        uname_lower_at = uname_at.lower()
-
-    conn = connect()
-    cur = conn.cursor()
-
-    # عددی دقیق یا یوزرنیم (case-insensitive)
-    if uname_at:
-        cur.execute("""
-            SELECT c.id, c.login, t.title, c.end_date
-            FROM accounts c
-            JOIN account_types t ON t.id = c.account_type_id
-            WHERE c.buyer_tg = ?
-               OR c.buyer_tg = ?
-               OR lower(c.buyer_tg) = ?
-        """, (uid_s, uname_at, uname_lower_at))
-    else:
-        cur.execute("""
-            SELECT c.id, c.login, t.title, c.end_date
-            FROM accounts c
-            JOIN account_types t ON t.id = c.account_type_id
-            WHERE c.buyer_tg = ?
-        """, (uid_s,))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    enriched = []
-    for cid, login, type_title, end_date in rows:
-        rem = remaining_days(end_date)
-        enriched.append((cid, login, type_title, end_date, rem))
-
-    # نزدیک‌ترین پایان اول
-    enriched.sort(key=lambda x: x[4])
-    return enriched
 
 # ==================== KEYBOARDS ====================
 def chunk2(items):
@@ -575,7 +450,6 @@ def main_menu_kb():
             InlineKeyboardButton("⚙️ تنظیمات", callback_data="menu_settings"),
             InlineKeyboardButton("❓ راهنما", callback_data="cmd_help"),
         ],
-        [InlineKeyboardButton("🏠 بازگشت به منوی کاربر", callback_data="home")],
     ])
 
 def settings_kb():
@@ -630,12 +504,12 @@ def duration_kb():
 def list_filter_kb():
     types = get_types()
     rows = [[InlineKeyboardButton("📋 کلیه اکانت‌ها", callback_data="list_all:0")]]
-
+    
     if types:
         type_btns = [InlineKeyboardButton(t[1], callback_data=f"list_type:{t[0]}:0") for t in types]
         for pair in chunk2(type_btns):
             rows.append(pair)
-
+    
     rows.append([InlineKeyboardButton(tr("home"), callback_data="home")])
     return InlineKeyboardMarkup(rows)
 
@@ -644,7 +518,7 @@ def info_actions_kb(cid: int, back_cb: str):
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("✏️ ویرایش", callback_data=f"edit_menu:{cid}:{b}"),
-            InlineKeyboardButton("✅ تمدید", callback_data=f"renew_prompt:{cid}:{b}"),
+            InlineKeyboardButton("✅ تمدید", callback_data=f"renew_prompt:{cid}:{b}"), # تغییر برای تمدید
             InlineKeyboardButton("🗑 حذف", callback_data=f"delete:{cid}:{b}"),
         ],
         [InlineKeyboardButton("📨 متن‌های آماده", callback_data=f"texts_ready:{cid}:{b}")],
@@ -688,40 +562,38 @@ def back_to_list_kb(back_cb: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ بازگشت", callback_data=back_cb)]
     ])
-
-def user_menu_kb(is_admin_flag: bool = False):
+def user_menu_kb(is_admin: bool = False):
     rows = [
         [InlineKeyboardButton("📌 استعلام اکانت‌های من", callback_data="user_inquiry")],
         [InlineKeyboardButton("❓ راهنما", callback_data="user_help")],
     ]
-    if is_admin_flag:
+    if is_admin:
         rows.append([InlineKeyboardButton("🔐 ورود به پنل مدیریت", callback_data="admin_panel")])
     return InlineKeyboardMarkup(rows)
 
-def user_inquiry_list_kb(items, page: int, total_pages: int):
-    rows = []
-    for cid, login, type_title, _end_date, rem in items:
-        label = "منقضی ❌" if rem < 0 else ("امروز ⚠️" if rem == 0 else f"{rem} روز")
-        back_cb = f"user_inq_list:{page}"
-        cb = f"user_inq_info:{cid}:{enc_cb(back_cb)}"
+def user_start_text() -> str:
+    return (
+        "سلام 👋\n"
+        "به ربات ExpiryHub خوش آمدید.\n\n"
+        "از طریق دکمه‌های زیر می‌تونید:\n"
+        "• وضعیت اکانت‌هاتون رو استعلام کنید\n"
+        "• راهنمای استفاده رو ببینید\n\n"
+        "✅ به‌زودی بخش استعلام کامل فعال می‌شود."
+    )
+def is_admin(update: Update) -> bool:
+    uid = update.effective_user.id if update.effective_user else None
+    return uid == ADMIN_CHAT_ID
 
-        # جدول شیشه‌ای سه ستونه؛ هر ستون کلیک‌پذیر روی یک callback مشترک
-        rows.append([
-            InlineKeyboardButton(login[:22], callback_data=cb),
-            InlineKeyboardButton(type_title[:18], callback_data=cb),
-            InlineKeyboardButton(label, callback_data=cb),
-        ])
+async def admin_only_cb(update: Update, message: str = "⛔️ فقط ادمین دسترسی دارد"):
+    """برای CallbackQuery ها"""
+    q = update.callback_query
+    if q:
+        await q.answer(message, show_alert=True)
 
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"user_inq_list:{page-1}"))
-    if page < total_pages - 1:
-        nav.append(InlineKeyboardButton("➡️ بعدی", callback_data=f"user_inq_list:{page+1}"))
-    if nav:
-        rows.append(nav)
-
-    rows.append([InlineKeyboardButton("🏠 منو", callback_data="home")])
-    return InlineKeyboardMarkup(rows)
+async def admin_only_msg(update: Update, message: str = "⛔️ فقط ادمین دسترسی دارد"):
+    """برای Message ها (کامندها)"""
+    if update.message:
+        await update.message.reply_text(message)
 
 # ==================== COMMANDS ====================
 async def setup_bot_commands(app):
@@ -741,46 +613,39 @@ async def setup_bot_commands(app):
     ]
 
     await app.bot.set_my_commands(public_cmds, scope=BotCommandScopeDefault())
+
     await app.bot.set_my_commands(admin_cmds, scope=BotCommandScopeChat(chat_id=ADMIN_CHAT_ID))
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    u = update.effective_user
-    if u:
-        upsert_bot_user(u.id, u.username)
 
-    await update.message.reply_text(
-        user_start_text(),
-        reply_markup=user_menu_kb(is_admin_flag=is_admin(update))
-    )
+    uid = update.effective_user.id if update.effective_user else None
+    is_admin = (uid == ADMIN_CHAT_ID)
+
+    if is_admin:
+        await update.message.reply_text(user_start_text(), reply_markup=user_menu_kb(is_admin=True))
+    else:
+        await update.message.reply_text(user_start_text(), reply_markup=user_menu_kb(is_admin=False))
+
+    return MENU
+
+
+async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    await update.message.reply_text("✅ ریست شد.\n\n" + start_text(), reply_markup=main_menu_kb())
     return MENU
 
 async def go_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     context.user_data.clear()
-    await q.edit_message_text(
-        user_start_text(),
-        reply_markup=user_menu_kb(is_admin_flag=is_admin(update))
-    )
+    await q.edit_message_text(start_text(), reply_markup=main_menu_kb())
     return MENU
 
-@admin_required
-async def admin_panel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    context.user_data.clear()
-    await q.edit_message_text(start_text_admin(), reply_markup=main_menu_kb())
-    return MENU
-
-@admin_required
-async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    await update.message.reply_text("✅ ریست شد.\n\n" + start_text_admin(), reply_markup=main_menu_kb())
-    return MENU
-
-@admin_required
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     context.user_data.clear()
     kb = type_pick_kb()
     if kb is None:
@@ -795,29 +660,33 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(tr("choose_type"), reply_markup=kb)
     return CHOOSING_TYPE
 
-@admin_required
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     context.user_data.clear()
     await update.message.reply_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb())
     return MENU
 
-@admin_required
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     if not os.path.exists(DB_PATH):
         await update.message.reply_text(tr("db_restore_bad"))
         return MENU
-
+    
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_name = f"ExpiryHub_{ts}.db"
     backup_path = os.path.join(BASE_DIR, backup_name)
-
+    
     try:
         src = sqlite3.connect(DB_PATH)
         dst = sqlite3.connect(backup_path)
         src.backup(dst)
         dst.close()
         src.close()
-
+        
         with open(backup_path, "rb") as f:
             await update.message.reply_document(
                 document=f,
@@ -830,11 +699,13 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove(backup_path)
         except:
             pass
-
+    
     return MENU
 
-@admin_required
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     context.user_data.clear()
     await update.message.reply_text(
         "🔍 جستجوی اکانت\n\n"
@@ -850,115 +721,94 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return WAIT_SEARCH_QUERY
 
-@admin_required
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await admin_only_cb(update)
+        return MENU
     context.user_data.clear()
     await update.message.reply_text(tr("settings_title"), reply_markup=settings_kb())
     return MENU
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    if is_admin(update):
-        help_text = (
-            "📖 راهنمای ادمین\n\n"
-            "/start - شروع\n"
-            "/add - افزودن اکانت\n"
-            "/list - لیست اکانت‌ها\n"
-            "/search - جستجو\n"
-            "/settings - تنظیمات\n"
-            "/backup - بکاپ\n"
-            "/cancel - لغو\n"
-        )
-    else:
-        help_text = (
-            "📖 راهنمای کاربران\n\n"
-            "• روی «استعلام اکانت‌های من» بزنید تا اکانت‌ها نمایش داده شود.\n"
-            "• روی هر ردیف بزنید تا جزئیات استعلام را ببینید.\n"
-        )
-    await update.message.reply_text(help_text, reply_markup=user_menu_kb(is_admin_flag=is_admin(update)))
-    return MENU
+    
+    help_text = """
+📖 راهنمای کامل ExpiryHub
 
-# ==================== USER CALLBACKS ====================
+━━━━━━━━━━━━━━━━━━
+📌 دستورات:
+
+/start - شروع ربات
+/add - افزودن اکانت
+/list - لیست اکانت‌ها
+/search - جستجوی اکانت
+/settings - تنظیمات
+/backup - بکاپ
+/help - راهنما
+/cancel - لغو
+
+━━━━━━━━━━━━━━━━━━
+✨ قابلیت‌ها:
+
+🗂 مدیریت کامل اکانت‌ها
+⏰ یادآوری خودکار
+📨 متن‌های آماده
+🔍 جستجوی پیشرفته
+📊 دسته‌بندی
+
+━━━━━━━━━━━━━━━━━━
+📞 پشتیبانی:
+
+توسعه‌دهنده: @EmadHabibnia
+کانال: @ExpiryHub
+━━━━━━━━━━━━━━━━━━
+"""
+    
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ افزودن اکانت", callback_data="menu_add")],
+        [
+            InlineKeyboardButton("🔍 جستجو", callback_data="cmd_search"),
+            InlineKeyboardButton("📋 لیست", callback_data="menu_list"),
+        ],
+        [InlineKeyboardButton("🏠 منوی اصلی", callback_data="home")],
+    ])
+    
+    await update.message.reply_text(help_text, reply_markup=keyboard)
+    return MENU
 async def user_help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     help_text = (
         "📖 راهنمای کاربران\n\n"
         "• برای استعلام اکانت‌ها روی «استعلام اکانت‌های من» بزنید.\n"
-        "• در لیست، هر چه زودتر تمام شود بالاتر است.\n"
-        "• با کلیک روی ردیف، جزئیات کامل نمایش داده می‌شود."
+        "• اگر مشکلی داشتید با پشتیبانی در ارتباط باشید.\n\n"
+        "✅ این بخش در حال تکمیل است."
     )
-    await q.edit_message_text(help_text, reply_markup=user_menu_kb(is_admin_flag=is_admin(update)))
-    return MENU
-
-async def show_user_inquiry_list(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int):
-    q = update.callback_query
-    u = update.effective_user
-    if not u:
-        await q.answer("خطا", show_alert=True)
-        return MENU
-
-    accounts = get_user_accounts_for_inquiry(u.id, u.username)
-
-    if not accounts:
-        await q.edit_message_text(
-            "❌ هیچ اکانتی برای شما ثبت نشده است.",
-            reply_markup=user_menu_kb(is_admin_flag=is_admin(update))
-        )
-        return MENU
-
-    total = len(accounts)
-    total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE or 1
-    if page >= total_pages:
-        page = total_pages - 1
-
-    page_items = accounts[page * PAGE_SIZE: page * PAGE_SIZE + PAGE_SIZE]
-
-    header = (
-        "📌 اکانت‌های شما\n\n"
-        "مرتب شده از نزدیک‌ترین پایان به دورترین ⏳\n\n"
-        f"صفحه {page + 1} از {total_pages}"
-    )
-    await q.edit_message_text(header, reply_markup=user_inquiry_list_kb(page_items, page, total_pages))
+    await q.edit_message_text(help_text, reply_markup=user_menu_kb(is_admin=(q.from_user.id == ADMIN_CHAT_ID)))
     return MENU
 
 async def user_inquiry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    context.user_data.clear()
-    return await show_user_inquiry_list(update, context, page=0)
-
-async def user_inquiry_list_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    _, page_s = q.data.split(":")
-    return await show_user_inquiry_list(update, context, page=int(page_s))
-
-async def user_inquiry_info_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    _, cid_s, enc_back = q.data.split(":", 2)
-    cid = int(cid_s)
-    back_cb = dec_cb(enc_back)
-
-    text = render_template_for_account("inquiry", cid)
-    if not text:
-        await q.answer("اکانت پیدا نشد", show_alert=True)
-        return MENU
-
     await q.edit_message_text(
-        text,
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("⬅️ بازگشت", callback_data=back_cb)],
-            [InlineKeyboardButton("🏠 منو", callback_data="home")]
-        ])
+        "📌 بخش استعلام اکانت‌ها هنوز فعال نشده.\n"
+        "به‌زودی اضافه می‌شود ✅",
+        reply_markup=user_menu_kb(is_admin=(q.from_user.id == ADMIN_CHAT_ID))
     )
     return MENU
+async def admin_panel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
-# ==================== SEARCH (ADMIN) ====================
-@admin_required
+    if q.from_user.id != ADMIN_CHAT_ID:
+        await q.answer("⛔️ دسترسی ندارید", show_alert=True)
+        return MENU
+
+    context.user_data.clear()
+    await q.edit_message_text(start_text(), reply_markup=main_menu_kb())
+    return MENU
+
+# ==================== SEARCH ====================
 async def cmd_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -974,14 +824,15 @@ async def cmd_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     return WAIT_SEARCH_QUERY
 
-@admin_required
 async def receive_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.message.text.strip()
+    
     if not query or len(query) < 2:
         await update.message.reply_text("❌ حداقل 2 کاراکتر وارد کنید")
         return WAIT_SEARCH_QUERY
-
+    
     results = search_accounts(query)
+    
     if not results:
         await update.message.reply_text(
             f"❌ نتیجه‌ای برای '{query}' پیدا نشد",
@@ -992,34 +843,39 @@ async def receive_search_query(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         context.user_data.clear()
         return MENU
-
+    
     text = f"🔍 نتایج: `{safe_bt(query)}`\n\n✅ {len(results)} نتیجه:\n\n"
     buttons = []
+    
     for i, (cid, login, type_title, buyer_tg, end_date) in enumerate(results[:10], 1):
         rem = remaining_days(end_date)
         status = "منقضی ❌" if rem < 0 else f"{rem} روز ⏳"
         text += f"{i}. `{safe_bt(login)}` - {type_title}\n   👤 {buyer_tg} | {status}\n\n"
-        buttons.append([InlineKeyboardButton(f"{i}. {login[:20]}", callback_data=f"info:{cid}:{enc_cb('search')}")])
-
+        buttons.append([
+            InlineKeyboardButton(f"{i}. {login[:20]}", callback_data=f"info:{cid}:{enc_cb('search')}")
+        ])
+    
+    if len(results) > 10:
+        text += f"⚠️ {len(results) - 10} نتیجه دیگر"
+    
     buttons.append([InlineKeyboardButton("🔍 جستجو", callback_data="cmd_search")])
     buttons.append([InlineKeyboardButton("🏠 منو", callback_data="home")])
-
+    
     await update.message.reply_text(
         text,
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=InlineKeyboardMarkup(buttons)
     )
-
+    
     context.user_data.clear()
     return MENU
 
-# ==================== MENU HANDLERS (ADMIN) ====================
-@admin_required
+# ==================== MENU HANDLERS ====================
 async def menu_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     context.user_data.clear()
-
+    
     kb = type_pick_kb()
     if kb is None:
         await q.edit_message_text(
@@ -1030,11 +886,10 @@ async def menu_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
         return MENU
-
+    
     await q.edit_message_text(tr("choose_type"), reply_markup=kb)
     return CHOOSING_TYPE
 
-@admin_required
 async def menu_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1042,7 +897,6 @@ async def menu_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb())
     return MENU
 
-@admin_required
 async def menu_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1050,48 +904,49 @@ async def menu_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(tr("settings_title"), reply_markup=settings_kb())
     return MENU
 
-@admin_required
 async def cmd_help_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    
+    help_text = """
+📖 راهنما
 
-    help_text = (
-        "📖 راهنمای ادمین\n\n"
-        "/start - شروع\n"
-        "/add - افزودن\n"
-        "/list - لیست\n"
-        "/search - جستجو\n"
-        "/settings - تنظیمات\n"
-        "/backup - بکاپ\n"
-        "/cancel - لغو\n"
-    )
+━━━━━━━━━━━━━━━━━━
+/start - شروع
+/add - افزودن اکانت
+/list - لیست
+/search - جستجو
+/settings - تنظیمات
+/help - راهنما
+
+━━━━━━━━━━━━━━━━━━
+📞 @EmadHabibnia
+━━━━━━━━━━━━━━━━━━
+"""
+    
     await q.edit_message_text(help_text, reply_markup=main_menu_kb())
     return MENU
 
-# ==================== SETTINGS (ADMIN) ====================
-@admin_required
+# ==================== SETTINGS ====================
 async def settings_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     await q.edit_message_text(tr("types_title"), reply_markup=types_kb())
     return MENU
 
-@admin_required
 async def settings_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     await q.edit_message_text(tr("db_title"), reply_markup=db_kb())
     return MENU
 
-@admin_required
 async def settings_texts(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     await q.edit_message_text("✍️ ویرایش متن‌ها", reply_markup=texts_kb())
     return MENU
 
-# ==================== TYPES (ADMIN) ====================
-@admin_required
+# ==================== TYPES ====================
 async def types_add_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1099,7 +954,6 @@ async def types_add_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(tr("types_add_ask"))
     return TYPES_ADD_WAIT
 
-@admin_required
 async def types_add_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     title = update.message.text.strip()
     ok, reason = add_type(title)
@@ -1110,30 +964,29 @@ async def types_add_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(msg, reply_markup=types_kb())
     return MENU
 
-@admin_required
 async def types_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     page = 0
     if q.data.startswith("types_list:"):
         try:
             page = int(q.data.split(":", 1)[1])
         except:
             page = 0
-
+    
     types = get_types()
     if not types:
         await q.edit_message_text(tr("types_none"), reply_markup=types_kb())
         return MENU
-
+    
     total = len(types)
     total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE or 1
     if page >= total_pages:
         page = total_pages - 1
-
+    
     page_items = types[page * PAGE_SIZE: page * PAGE_SIZE + PAGE_SIZE]
-
+    
     rows = []
     for tid, title in page_items:
         rows.append([
@@ -1141,7 +994,7 @@ async def types_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("✏️", callback_data=f"types_edit:{tid}:{page}"),
             InlineKeyboardButton("🗑", callback_data=f"types_del:{tid}:{page}"),
         ])
-
+    
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"types_list:{page-1}"))
@@ -1149,16 +1002,15 @@ async def types_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nav.append(InlineKeyboardButton("➡️ بعدی", callback_data=f"types_list:{page+1}"))
     if nav:
         rows.append(nav)
-
+    
     rows.append([InlineKeyboardButton("🏠 منو", callback_data="menu_settings")])
-
+    
     await q.edit_message_text(
         f"📋 لیست نوع‌ها\n\nصفحه {page+1} از {total_pages}",
         reply_markup=InlineKeyboardMarkup(rows)
     )
     return MENU
 
-@admin_required
 async def types_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1168,12 +1020,11 @@ async def types_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(tr("types_edit_ask"))
     return TYPES_EDIT_WAIT
 
-@admin_required
 async def types_edit_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tid = context.user_data.get("types_edit_id")
     page = context.user_data.get("types_edit_page", 0)
     new_title = update.message.text.strip()
-
+    
     ok = edit_type(int(tid), new_title)
     if ok:
         await update.message.reply_text(tr("types_edited"), reply_markup=InlineKeyboardMarkup([
@@ -1185,17 +1036,16 @@ async def types_edit_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data.clear()
     return MENU
 
-@admin_required
 async def types_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     _, tid, page = q.data.split(":")
     ok, reason = delete_type(int(tid))
-
+    
     if not ok and reason == "blocked":
         await q.answer(tr("types_delete_blocked"), show_alert=True)
         return MENU
-
+    
     await q.message.reply_text(tr("types_deleted"))
     await q.message.reply_text(
         "بازگشت 👇",
@@ -1209,27 +1059,26 @@ async def types_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def noop_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
 
-# ==================== DB BACKUP/RESTORE (ADMIN) ====================
-@admin_required
+# ==================== DB BACKUP/RESTORE ====================
 async def db_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     if not os.path.exists(DB_PATH):
         await q.message.reply_text(tr("db_restore_bad"))
         return MENU
-
+    
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_name = f"ExpiryHub_{ts}.db"
     backup_path = os.path.join(BASE_DIR, backup_name)
-
+    
     try:
         src = sqlite3.connect(DB_PATH)
         dst = sqlite3.connect(backup_path)
         src.backup(dst)
         dst.close()
         src.close()
-
+        
         with open(backup_path, "rb") as f:
             await q.message.reply_document(
                 document=f,
@@ -1242,29 +1091,28 @@ async def db_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 os.remove(backup_path)
         except:
             pass
-
+    
     return MENU
 
-@admin_required
 async def db_restore_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     await q.edit_message_text(tr("db_restore_ask"))
     return WAIT_RESTORE_FILE
 
-@admin_required
 async def db_restore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
     if not doc:
         await update.message.reply_text(tr("db_restore_bad"))
         return WAIT_RESTORE_FILE
-
+    
     tmp_path = os.path.join(BASE_DIR, "restore_tmp.db")
-
+    
     try:
         file = await context.bot.get_file(doc.file_id)
         await file.download_to_drive(custom_path=tmp_path)
-
+        
+        # Validate
         try:
             with open(tmp_path, "rb") as f:
                 head = f.read(16)
@@ -1274,14 +1122,14 @@ async def db_restore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
             os.remove(tmp_path)
             await update.message.reply_text(tr("db_restore_bad"))
             return WAIT_RESTORE_FILE
-
+        
         os.replace(tmp_path, DB_PATH)
         init_db()
-
+        
         await update.message.reply_text(tr("db_restore_done"), reply_markup=main_menu_kb())
         return MENU
-
-    except Exception:
+    
+    except Exception as e:
         await update.message.reply_text("❌ خطا در ریستور")
         return WAIT_RESTORE_FILE
     finally:
@@ -1291,28 +1139,29 @@ async def db_restore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except:
             pass
 
-# ==================== TEXT EDITING (ADMIN) ====================
-@admin_required
+# ==================== TEXT EDITING ====================
 async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     _, key = q.data.split(":", 1)
     context.user_data.clear()
     context.user_data["edit_text_key"] = key
-
+    
+    # متغیرهای راهنما
     help_vars = (
         "💡 متغیرهای مجاز (کپی و در متن استفاده کنید):\n"
-        "• <code>{buyer_tg}</code>\n"
-        "• <code>{account_type}</code>\n"
-        "• <code>{login}</code>\n"
-        "• <code>{start_date}</code>\n"
-        "• <code>{end_date}</code>\n"
-        "• <code>{end_date_jalali}</code>\n"
-        "• <code>{duration_days}</code>\n"
-        "• <code>{days_left}</code>\n"
-        "• <code>{description}</code>\n"
+        "• `{buyer_tg}` : نام/آیدی خریدار\n"
+        "• <code>{buyer_tg}</code> : نام/آیدی خریدار\n"
+        "• <code>{account_type}</code> : نوع اکانت\n"
+        "• <code>{login}</code> : یوزر/ایمیل\n"
+        "• <code>{start_date}</code> : شروع میلادی\n"
+        "• <code>{end_date}</code> : پایان میلادی\n"
+        "• <code>{end_date_jalali}</code> : پایان شمسی\n"
+        "• <code>{duration_days}</code> : مدت اکانت\n"
+        "• <code>{days_left}</code> : روزهای مانده\n"
+        "• <code>{description}</code> : توضیحات\n"
     )
-
+    
     current = get_bot_text(key)
     await q.edit_message_text(
         f"✏️ ویرایش متن ({key})\n\n"
@@ -1323,51 +1172,48 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return WAIT_TEXT_EDIT
 
-@admin_required
 async def text_edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     key = context.user_data.get("edit_text_key")
     if not key:
         await update.message.reply_text(tr("unknown"))
         return MENU
-
+    
     body = update.message.text
     set_bot_text(key, body)
-
+    
     await update.message.reply_text("✅ متن ذخیره شد", reply_markup=texts_kb())
     context.user_data.clear()
     return MENU
 
-# ==================== ADD ACCOUNT FLOW (ADMIN) ====================
-@admin_required
+# ==================== ADD ACCOUNT FLOW ====================
 async def type_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, tid = q.data.split(":")
     title = type_title_by_id(int(tid))
     if not title:
         await q.edit_message_text(tr("no_types"), reply_markup=main_menu_kb())
         return MENU
-
+    
     context.user_data["account_type_id"] = int(tid)
     context.user_data["account_type_title"] = title
     await q.edit_message_text(tr("choose_start"), reply_markup=start_choice_kb())
     return START_CHOICE
 
-@admin_required
 async def start_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "start"
-
+    
     if q.data == "start_today":
         new_start = date.today().strftime("%Y-%m-%d")
-
+        
         if is_edit:
             cid = int(context.user_data["edit_cid"])
             enc_back = context.user_data["edit_enc_back"]
-
+            
             conn = connect()
             cur = conn.cursor()
             cur.execute("SELECT duration_days FROM accounts WHERE id=?", (cid,))
@@ -1376,7 +1222,7 @@ async def start_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 conn.close()
                 await q.message.reply_text("❌ اکانت پیدا نشد")
                 return MENU
-
+            
             duration_days = int(row[0])
             new_end = compute_end_date(new_start, duration_days)
             cur.execute("UPDATE accounts SET start_date=?, end_date=? WHERE id=?", (new_start, new_end, cid))
@@ -1390,22 +1236,21 @@ async def start_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
             context.user_data.clear()
             return MENU
-
+        
         context.user_data["start_date"] = new_start
         await q.edit_message_text(tr("choose_duration"), reply_markup=duration_kb())
         return DURATION_CHOICE
-
+    
     if q.data == "start_greg":
         await q.edit_message_text(tr("ask_greg"))
         return START_GREGORIAN
-
+    
     if q.data == "start_jalali":
         await q.edit_message_text(tr("ask_jalali"))
         return START_JALALI
-
+    
     return START_CHOICE
 
-@admin_required
 async def start_gregorian_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     try:
@@ -1413,12 +1258,12 @@ async def start_gregorian_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
     except:
         await update.message.reply_text(tr("bad_greg"))
         return START_GREGORIAN
-
+    
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "start"
     if is_edit:
         cid = int(context.user_data["edit_cid"])
         enc_back = context.user_data["edit_enc_back"]
-
+        
         conn = connect()
         cur = conn.cursor()
         cur.execute("SELECT duration_days FROM accounts WHERE id=?", (cid,))
@@ -1427,7 +1272,7 @@ async def start_gregorian_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
             conn.close()
             await update.message.reply_text("❌ اکانت پیدا نشد")
             return MENU
-
+        
         duration_days = int(row[0])
         new_end = compute_end_date(text, duration_days)
         cur.execute("UPDATE accounts SET start_date=?, end_date=? WHERE id=?", (text, new_end, cid))
@@ -1435,15 +1280,21 @@ async def start_gregorian_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         conn.close()
 
         msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد")
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
+        if not msg:
+            await update.message.reply_text("❌ اکانت پیدا نشد")
+            return MENU
+        await update.message.reply_text(
+            msg,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=back_to_config_kb(cid, enc_back)
+        )
         context.user_data.clear()
         return MENU
-
+    
     context.user_data["start_date"] = text
     await update.message.reply_text(tr("choose_duration"), reply_markup=duration_kb())
     return DURATION_CHOICE
 
-@admin_required
 async def start_jalali_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     try:
@@ -1453,12 +1304,12 @@ async def start_jalali_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text(tr("bad_jalali"))
         return START_JALALI
-
+    
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "start"
     if is_edit:
         cid = int(context.user_data["edit_cid"])
         enc_back = context.user_data["edit_enc_back"]
-
+        
         conn = connect()
         cur = conn.cursor()
         cur.execute("SELECT duration_days FROM accounts WHERE id=?", (cid,))
@@ -1467,7 +1318,7 @@ async def start_jalali_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.close()
             await update.message.reply_text("❌ اکانت پیدا نشد")
             return MENU
-
+        
         duration_days = int(row[0])
         new_end = compute_end_date(new_start, duration_days)
         cur.execute("UPDATE accounts SET start_date=?, end_date=? WHERE id=?", (new_start, new_end, cid))
@@ -1475,29 +1326,35 @@ async def start_jalali_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.close()
 
         msg = format_account_update_message(cid, "✅ تاریخ شروع بروزرسانی شد")
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
+        if not msg:
+            await update.message.reply_text("❌ اکانت پیدا نشد")
+            return MENU
+        await update.message.reply_text(
+            msg,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=back_to_config_kb(cid, enc_back)
+        )
         context.user_data.clear()
         return MENU
-
+    
     context.user_data["start_date"] = new_start
     await update.message.reply_text(tr("choose_duration"), reply_markup=duration_kb())
     return DURATION_CHOICE
 
-@admin_required
 async def duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "duration"
     mapping = {"dur_30": 30, "dur_90": 90, "dur_180": 180, "dur_365": 365}
-
+    
     if q.data in mapping:
         days = mapping[q.data]
-
+        
         if is_edit:
             cid = int(context.user_data["edit_cid"])
             enc_back = context.user_data["edit_enc_back"]
-
+            
             conn = connect()
             cur = conn.cursor()
             cur.execute("SELECT start_date FROM accounts WHERE id=?", (cid,))
@@ -1506,7 +1363,7 @@ async def duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 conn.close()
                 await q.edit_message_text("❌ اکانت پیدا نشد")
                 return MENU
-
+            
             start_date_s = row[0]
             new_end = compute_end_date(start_date_s, days)
             cur.execute("UPDATE accounts SET duration_days=?, end_date=? WHERE id=?", (days, new_end, cid))
@@ -1514,38 +1371,44 @@ async def duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE)
             conn.close()
 
             msg = format_account_update_message(cid, "✅ مدت زمان بروزرسانی شد")
-            await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
+            if not msg:
+                await q.message.reply_text("❌ اکانت پیدا نشد")
+                return MENU
+            await q.message.reply_text(
+                msg,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=back_to_config_kb(cid, enc_back)
+            )
             context.user_data.clear()
             return MENU
-
+        
         context.user_data["duration_days"] = days
         context.user_data["end_date"] = compute_end_date(context.user_data["start_date"], days)
         await q.edit_message_text(tr("ask_tg"))
         return BUYER_TG
-
+    
     if q.data == "dur_manual":
         await q.edit_message_text(tr("dur_manual_ask"))
         return DURATION_MANUAL
-
+    
     return DURATION_CHOICE
 
-@admin_required
 async def duration_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if not text.isdigit():
         await update.message.reply_text(tr("bad_number"))
         return DURATION_MANUAL
-
+    
     days = int(text)
     if days <= 0 or days > 3650:
         await update.message.reply_text(tr("bad_range"))
         return DURATION_MANUAL
-
+    
     is_edit = context.user_data.get("edit_mode") and context.user_data.get("edit_action") == "duration"
     if is_edit:
         cid = int(context.user_data["edit_cid"])
         enc_back = context.user_data["edit_enc_back"]
-
+        
         conn = connect()
         cur = conn.cursor()
         cur.execute("SELECT start_date FROM accounts WHERE id=?", (cid,))
@@ -1554,7 +1417,7 @@ async def duration_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
             conn.close()
             await update.message.reply_text("❌ اکانت پیدا نشد")
             return MENU
-
+        
         start_date_s = row[0]
         new_end = compute_end_date(start_date_s, days)
         cur.execute("UPDATE accounts SET duration_days=?, end_date=? WHERE id=?", (days, new_end, cid))
@@ -1562,34 +1425,37 @@ async def duration_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE
         conn.close()
 
         msg = format_account_update_message(cid, "✅ مدت زمان بروزرسانی شد")
-        await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
+        if not msg:
+            await update.message.reply_text("❌ اکانت پیدا نشد")
+            return MENU
+        await update.message.reply_text(
+            msg,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=back_to_config_kb(cid, enc_back)
+        )
         context.user_data.clear()
         return MENU
-
+    
     context.user_data["duration_days"] = days
     context.user_data["end_date"] = compute_end_date(context.user_data["start_date"], days)
     await update.message.reply_text(tr("ask_tg"))
     return BUYER_TG
 
-@admin_required
 async def buyer_tg_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["buyer_tg"] = str(update.message.text).strip()
     await update.message.reply_text(tr("ask_login"))
     return LOGIN
 
-@admin_required
 async def login_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["login"] = str(update.message.text).strip()
     await update.message.reply_text(tr("ask_password"))
     return PASSWORD
 
-@admin_required
 async def password_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["password"] = str(update.message.text).strip()
     await update.message.reply_text(tr("ask_description"))
     return DESCRIPTION
 
-@admin_required
 async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["description"] = str(update.message.text).strip()
 
@@ -1616,7 +1482,7 @@ async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ))
         conn.commit()
         conn.close()
-    except Exception:
+    except Exception as e:
         await update.message.reply_text("❌ خطا در ذخیره‌سازی")
         return MENU
 
@@ -1637,16 +1503,15 @@ async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return MENU
 
-# ==================== RENEW LOGIC ====================
-@admin_required
+# ==================== RENEW LOGIC (NEW) ====================
 async def renew_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, cid_s, enc_back = q.data.split(":", 2)
     context.user_data["renew_cid"] = int(cid_s)
     context.user_data["renew_enc_back"] = enc_back
-
+    
     await q.edit_message_text(
         "⏳ مدت زمان تمدید اکانت را انتخاب کن (روز):\n"
         "تاریخ انقضا از امروز محاسبه خواهد شد.",
@@ -1654,62 +1519,55 @@ async def renew_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return WAIT_RENEW_DURATION
 
-@admin_required
 async def renew_duration_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     cid = context.user_data.get("renew_cid")
     enc_back = context.user_data.get("renew_enc_back")
     mapping = {"dur_30": 30, "dur_90": 90, "dur_180": 180, "dur_365": 365}
-
+    
     if q.data in mapping:
         days = mapping[q.data]
         return await perform_renew(update, context, cid, days, enc_back)
-
+    
     if q.data == "dur_manual":
         await q.edit_message_text("✍️ مدت زمان تمدید را به روز وارد کن (فقط عدد):")
-        return WAIT_RENEW_DURATION
+        return WAIT_RENEW_DURATION # استفاده از مسیج هندلر برای گرفتن عدد
 
-    return WAIT_RENEW_DURATION
-
-@admin_required
 async def renew_manual_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     if not text.isdigit():
         await update.message.reply_text(tr("bad_number"))
         return WAIT_RENEW_DURATION
-
+    
     days = int(text)
-    if days <= 0 or days > 3650:
-        await update.message.reply_text(tr("bad_range"))
-        return WAIT_RENEW_DURATION
-
     cid = context.user_data.get("renew_cid")
     enc_back = context.user_data.get("renew_enc_back")
+    
     return await perform_renew(update, context, cid, days, enc_back)
 
 async def perform_renew(update: Update, context: ContextTypes.DEFAULT_TYPE, cid, days, enc_back):
     new_start = date.today().strftime("%Y-%m-%d")
     new_end = compute_end_date(new_start, days)
-
+    
     conn = connect()
     cur = conn.cursor()
     cur.execute("UPDATE accounts SET start_date=?, end_date=?, duration_days=? WHERE id=?", (new_start, new_end, days, cid))
     conn.commit()
     conn.close()
-
+    
     msg = format_account_update_message(cid, "✅ اکانت با موفقیت تمدید شد")
+    
     if update.callback_query:
         await update.callback_query.edit_message_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
     else:
         await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
-
+    
     context.user_data.clear()
     return MENU
 
-# ==================== LIST ACCOUNTS (ADMIN) ====================
-@admin_required
+# ==================== LIST ACCOUNTS ====================
 async def list_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1717,7 +1575,6 @@ async def list_all_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     page = int(page_s)
     return await show_accounts_list(update, context, None, page)
 
-@admin_required
 async def list_type_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1726,7 +1583,7 @@ async def list_type_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE, type_id, page):
     q = update.callback_query
-
+    
     conn = connect()
     cur = conn.cursor()
     if type_id is None:
@@ -1744,7 +1601,7 @@ async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
         """, (type_id,))
     raw = cur.fetchall()
     conn.close()
-
+    
     if not raw:
         await q.edit_message_text(
             tr("list_empty"),
@@ -1754,23 +1611,26 @@ async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
             ])
         )
         return MENU
-
+    
     active, expired = [], []
     for cid, login, end_date_s, type_title in raw:
-        rem = remaining_days(end_date_s)
+        try:
+            rem = remaining_days(end_date_s)
+        except:
+            rem = -999
         (active if rem >= 0 else expired).append((cid, login, rem, type_title))
-
+    
     active.sort(key=lambda x: x[2])
     expired.sort(key=lambda x: x[2])
     items = active + expired
-
+    
     total = len(items)
     total_pages = (total + PAGE_SIZE - 1) // PAGE_SIZE or 1
     if page >= total_pages:
         page = total_pages - 1
-
+    
     page_items = items[page * PAGE_SIZE: page * PAGE_SIZE + PAGE_SIZE]
-
+    
     kb_rows = []
     for cid, login, rem, _type_title in page_items:
         label = tr("expired_label") if rem < 0 else (tr("today_label") if rem == 0 else f"{rem}")
@@ -1780,7 +1640,7 @@ async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
             InlineKeyboardButton(label, callback_data=f"noop:{cid}"),
             InlineKeyboardButton(tr("more_info"), callback_data=f"info:{cid}:{enc_cb(back_cb)}"),
         ])
-
+    
     nav_row = []
     if page > 0:
         prev_cb = f"list_all:{page-1}" if type_id is None else f"list_type:{type_id}:{page-1}"
@@ -1790,51 +1650,53 @@ async def show_accounts_list(update: Update, context: ContextTypes.DEFAULT_TYPE,
         nav_row.append(InlineKeyboardButton("➡️ بعدی", callback_data=next_cb))
     if nav_row:
         kb_rows.append(nav_row)
-
+    
     kb_rows.append([InlineKeyboardButton(tr("back_filters"), callback_data="menu_list")])
     kb_rows.append([InlineKeyboardButton(tr("home"), callback_data="home")])
-
+    
     title = "📋 کلیه اکانت‌ها" if type_id is None else f"📋 {type_title_by_id(type_id) or '-'}"
     header = (
         f"{title}\n\n"
         "اکانت‌ها بر اساس نزدیک‌ترین تاریخ پایان،\n"
         "از بالا به پایین مرتب شده‌اند ⏳\n\n"
+        "اکانت‌هایی که تاریخ آن‌ها به پایان رسیده،\n"
+        "در انتهای لیست با وضعیت «منقضی» نمایش داده می‌شوند.\n\n"
+        "برای مشاهده جزئیات هر اکانت،\n"
+        "روی گزینه «ℹ️ اطلاعات بیشتر» کلیک کنید 👇\n\n"
         f"صفحه {page+1} از {total_pages}"
     )
-
+    
     await q.edit_message_text(header, reply_markup=InlineKeyboardMarkup(kb_rows))
     return MENU
 
-# ==================== ACCOUNT INFO/ACTIONS (ADMIN) ====================
+# ==================== ACCOUNT INFO/ACTIONS ====================
 async def noop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
 
-@admin_required
 async def info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, cid_s, enc_back = q.data.split(":", 2)
     cid = int(cid_s)
     back_cb = dec_cb(enc_back)
-
+    
     msg = get_account_full_text(cid)
     if not msg:
         await q.answer("یافت نشد", show_alert=True)
         return MENU
-
+    
     await q.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=info_actions_kb(cid, back_cb))
     return MENU
 
-@admin_required
 async def delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, cid_s, enc_back = q.data.split(":", 2)
     cid = int(cid_s)
     back_cb = dec_cb(enc_back)
-
+    
     try:
         conn = connect()
         cur = conn.cursor()
@@ -1845,58 +1707,55 @@ async def delete_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await q.message.reply_text("❌ خطا در حذف")
         return MENU
-
+    
     if deleted == 0:
         await q.message.reply_text("⚠️ اکانت پیدا نشد")
         return MENU
-
+    
     await q.message.reply_text("🗑 حذف شد ✅", reply_markup=back_to_list_kb(back_cb))
     return MENU
 
-@admin_required
 async def texts_ready(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, cid_s, enc_back = q.data.split(":", 2)
     cid = int(cid_s)
-
+    
     await q.message.reply_text(
         "📨 متن‌های آماده\n\nیکی را انتخاب کن:",
         reply_markup=ready_texts_kb(cid, enc_back)
     )
     return MENU
 
-@admin_required
 async def send_ready_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, key, cid_s, enc_back = q.data.split(":", 3)
     cid = int(cid_s)
-
+    
     text = render_template_for_account(key, cid)
     if not text:
         await q.answer("اکانت پیدا نشد", show_alert=True)
         return MENU
-
+    
     await q.message.reply_text(text, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(cid, enc_back))
     return MENU
 
-# ==================== EDIT ACCOUNT (ADMIN) ====================
-@admin_required
+# ==================== EDIT ACCOUNT ====================
 async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, cid_s, enc_back = q.data.split(":", 2)
     cid = int(cid_s)
-
+    
     msg = get_account_full_text(cid)
     if not msg:
         await q.answer("یافت نشد", show_alert=True)
         return MENU
-
+    
     await q.message.reply_text(
         msg + "\n\n✏️ یکی از گزینه‌ها را انتخاب کن:",
         parse_mode=ParseMode.MARKDOWN,
@@ -1904,46 +1763,44 @@ async def edit_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return MENU
 
-@admin_required
 async def edit_start_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, cid_s, enc_back = q.data.split(":", 2)
     context.user_data.clear()
     context.user_data["edit_mode"] = True
     context.user_data["edit_action"] = "start"
     context.user_data["edit_cid"] = int(cid_s)
     context.user_data["edit_enc_back"] = enc_back
-
+    
     await q.message.reply_text("📅 تاریخ شروع جدید:", reply_markup=start_choice_kb())
     return START_CHOICE
 
-@admin_required
 async def edit_duration_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
+    
     _, cid_s, enc_back = q.data.split(":", 2)
     context.user_data.clear()
     context.user_data["edit_mode"] = True
     context.user_data["edit_action"] = "duration"
     context.user_data["edit_cid"] = int(cid_s)
     context.user_data["edit_enc_back"] = enc_back
-
+    
     await q.message.reply_text("⏳ مدت زمان جدید (روز):", reply_markup=duration_kb())
     return DURATION_CHOICE
 
 async def edit_field_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, field_key: str, title: str):
     q = update.callback_query
     await q.answer()
-
+    
     _, cid_s, enc_back = q.data.split(":", 2)
     context.user_data.clear()
     context.user_data["edit_field"] = field_key
     context.user_data["edit_cid"] = int(cid_s)
     context.user_data["edit_enc_back"] = enc_back
-
+    
     msg = get_account_full_text(int(cid_s))
     if msg:
         await q.message.reply_text(
@@ -1953,47 +1810,42 @@ async def edit_field_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         )
     else:
         await q.message.reply_text(title)
-
+    
     return WAIT_EDIT_FIELD
 
-@admin_required
 async def edit_tg_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_prompt(update, context, "buyer_tg", "👤 ویرایش تلگرام (آیدی عددی یا یوزرنیم)")
 
-@admin_required
 async def edit_login_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_prompt(update, context, "login", "📧 ویرایش یوزر/ایمیل")
 
-@admin_required
 async def edit_password_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_prompt(update, context, "password", "🔑 ویرایش پسورد")
 
-@admin_required
 async def edit_description_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await edit_field_prompt(update, context, "description", "📝 ویرایش توضیحات")
 
-@admin_required
 async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     field = context.user_data.get("edit_field")
     cid = context.user_data.get("edit_cid")
     enc_back = context.user_data.get("edit_enc_back")
-
+    
     if not field or not cid or not enc_back:
         await update.message.reply_text(tr("unknown"))
         return MENU
-
+    
     new_val = update.message.text.strip()
-
+    
     if field not in ("buyer_tg", "login", "password", "description"):
         await update.message.reply_text("❌ فیلد نامعتبر")
         return MENU
-
+    
     conn = connect()
     cur = conn.cursor()
     cur.execute(f"UPDATE accounts SET {field}=? WHERE id=?", (new_val, int(cid)))
     conn.commit()
     conn.close()
-
+    
     titles = {
         "buyer_tg": "✅ تلگرام بروزرسانی شد",
         "login": "✅ یوزر/ایمیل بروزرسانی شد",
@@ -2004,7 +1856,7 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not msg:
         await update.message.reply_text("❌ اکانت پیدا نشد")
         return MENU
-
+    
     context.user_data.clear()
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=back_to_config_kb(int(cid), enc_back))
     return MENU
@@ -2012,75 +1864,66 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================== REMINDERS ====================
 async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
     today = date.today()
-
+    
     conn = connect()
     cur = conn.cursor()
-    cur.execute("SELECT c.id, c.end_date, c.buyer_tg FROM accounts c")
+    cur.execute("SELECT c.id, c.end_date FROM accounts c")
     rows = cur.fetchall()
     conn.close()
-
-    for cid, end_date_s, buyer_tg in rows:
+    
+    for cid, end_date_s in rows:
         try:
             end_d = datetime.strptime(end_date_s, "%Y-%m-%d").date()
         except:
             continue
-
+        
         diff = (end_d - today).days
-        buyer_chat_id = resolve_buyer_chat_id(buyer_tg)
-
+        
         if diff == 2:
             text = render_template_for_account("reminder_2days", int(cid))
             if text:
-                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text, parse_mode=ParseMode.MARKDOWN)
-                if buyer_chat_id:
-                    try:
-                        await context.bot.send_message(chat_id=buyer_chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
-                    except:
-                        pass
-
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=text,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+        
         if diff == 0:
             text = render_template_for_account("due_day", int(cid))
             if text:
-                await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text, parse_mode=ParseMode.MARKDOWN)
-                if buyer_chat_id:
-                    try:
-                        await context.bot.send_message(chat_id=buyer_chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
-                    except:
-                        pass
+                await context.bot.send_message(
+                    chat_id=ADMIN_CHAT_ID,
+                    text=text,
+                    parse_mode=ParseMode.MARKDOWN
+                )
 
 # ==================== MAIN ====================
 def main():
     init_db()
     app = ApplicationBuilder().token(TOKEN).build()
+    
     app.post_init = setup_bot_commands
-
+      
+    # Conversation handler
     conv = ConversationHandler(
         entry_points=[
             CommandHandler("start", start_cmd),
-            CommandHandler("help", cmd_help),
-
-            # admin commands (guarded)
-            CommandHandler("add", cmd_add),
+            CommandHandler("add", cmd_add),      
             CommandHandler("list", cmd_list),
             CommandHandler("search", cmd_search),
             CommandHandler("settings", cmd_settings),
             CommandHandler("backup", cmd_backup),
-            CommandHandler("cancel", cancel_cmd),
-        ],
+            CommandHandler("help", cmd_help),
+            ],
         states={
             MENU: [
-                # user
                 CallbackQueryHandler(user_inquiry_cb, pattern="^user_inquiry$"),
-                CallbackQueryHandler(user_inquiry_list_cb, pattern=r"^user_inq_list:\d+$"),
-                CallbackQueryHandler(user_inquiry_info_cb, pattern=r"^user_inq_info:\d+:.+"),
                 CallbackQueryHandler(user_help_cb, pattern="^user_help$"),
                 CallbackQueryHandler(admin_panel_cb, pattern="^admin_panel$"),
-                CallbackQueryHandler(go_home, pattern="^home$"),
-
-                # admin panel callbacks (guarded functions)
                 CallbackQueryHandler(menu_add, pattern="^menu_add$"),
                 CallbackQueryHandler(menu_list, pattern="^menu_list$"),
                 CallbackQueryHandler(menu_settings, pattern="^menu_settings$"),
+                CallbackQueryHandler(go_home, pattern="^home$"),
                 CallbackQueryHandler(settings_types, pattern="^settings_types$"),
                 CallbackQueryHandler(settings_db, pattern="^settings_db$"),
                 CallbackQueryHandler(settings_texts, pattern="^settings_texts$"),
@@ -2094,7 +1937,7 @@ def main():
                 CallbackQueryHandler(list_all_cb, pattern=r"^list_all:\d+$"),
                 CallbackQueryHandler(list_type_cb, pattern=r"^list_type:\d+:\d+$"),
                 CallbackQueryHandler(info_handler, pattern=r"^info:\d+:.+"),
-                CallbackQueryHandler(renew_prompt, pattern=r"^renew_prompt:\d+:.+"),
+                CallbackQueryHandler(renew_prompt, pattern=r"^renew_prompt:\d+:.+"), # هندلر جدید
                 CallbackQueryHandler(delete_handler, pattern=r"^delete:\d+:.+"),
                 CallbackQueryHandler(edit_menu_handler, pattern=r"^edit_menu:\d+:.+"),
                 CallbackQueryHandler(edit_start_prompt, pattern=r"^edit_start:\d+:.+"),
@@ -2119,6 +1962,9 @@ def main():
             ],
             START_GREGORIAN: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, start_gregorian_msg)
+            ],
+            DURATION_MANUAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, duration_manual_msg)
             ],
             START_JALALI: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, start_jalali_msg),
@@ -2159,35 +2005,37 @@ def main():
             WAIT_SEARCH_QUERY: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_search_query),
             ],
-            WAIT_RENEW_DURATION: [
+            WAIT_RENEW_DURATION: [ # هندلرهای جدید تمدید
                 CallbackQueryHandler(renew_duration_choice_cb, pattern=r"^dur_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, renew_manual_msg),
             ],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_cmd),
-            CommandHandler("start", start_cmd),
         ],
         allow_reentry=True,
         per_message=False,
     )
-
+    
     app.add_handler(conv)
-
+    
+    # Setup reminders
     if app.job_queue:
         app.job_queue.run_daily(
             check_daily_reminders,
             time=dtime(hour=10, minute=0),
             name="daily_reminders"
         )
-
+    
+    # Python 3.14 fix
     try:
         asyncio.get_event_loop()
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
-
+    
     print("🚀 ExpiryHub Bot Started!")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
