@@ -1053,15 +1053,15 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # متغیرهای راهنما
     help_vars = (
         "💡 متغیرهای مجاز (کپی و در متن استفاده کنید):\n"
-        "• `{buyer_tg}` : نام/آیدی خریدار\n"
-        "• `{account_type}` : نوع اکانت\n"
-        "• `{login}` : یوزر/ایمیل\n"
-        "• `{start_date}` : شروع میلادی\n"
-        "• `{end_date}` : پایان میلادی\n"
-        "• `{end_date_jalali}` : پایان شمسی\n"
-        "• `{duration_days}` : مدت اکانت\n"
-        "• `{days_left}` : روزهای مانده\n"
-        "• `{description}` : توضیحات\n"
+        "• <code>{buyer_tg}</code> : نام/آیدی خریدار\n"
+        "• <code>{account_type}</code> : نوع اکانت\n"
+        "• <code>{login}</code> : یوزر/ایمیل\n"
+        "• <code>{start_date}</code> : شروع میلادی\n"
+        "• <code>{end_date}</code> : پایان میلادی\n"
+        "• <code>{end_date_jalali}</code> : پایان شمسی\n"
+        "• <code>{duration_days}</code> : مدت اکانت\n"
+        "• <code>{days_left}</code> : روزهای مانده\n"
+        "• <code>{description}</code> : توضیحات\n"
     )
     
     current = get_bot_text(key)
@@ -1935,3 +1935,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
