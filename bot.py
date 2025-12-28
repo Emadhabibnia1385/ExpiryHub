@@ -13,6 +13,7 @@ import html
 from datetime import datetime, date, timedelta, time as dtime
 
 import jdatetime
+from telegram import BotCommandScopeDefault, BotCommandScopeChat
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -561,10 +562,32 @@ def back_to_list_kb(back_cb: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("⬅️ بازگشت", callback_data=back_cb)]
     ])
+def user_menu_kb(is_admin: bool = False):
+    rows = [
+        [InlineKeyboardButton("📌 استعلام اکانت‌های من", callback_data="user_inquiry")],
+        [InlineKeyboardButton("❓ راهنما", callback_data="user_help")],
+    ]
+    if is_admin:
+        rows.append([InlineKeyboardButton("🔐 ورود به پنل مدیریت", callback_data="admin_panel")])
+    return InlineKeyboardMarkup(rows)
+
+def user_start_text() -> str:
+    return (
+        "سلام 👋\n"
+        "به ربات ExpiryHub خوش آمدید.\n\n"
+        "از طریق دکمه‌های زیر می‌تونید:\n"
+        "• وضعیت اکانت‌هاتون رو استعلام کنید\n"
+        "• راهنمای استفاده رو ببینید\n\n"
+        "✅ به‌زودی بخش استعلام کامل فعال می‌شود."
+    )
 
 # ==================== COMMANDS ====================
 async def setup_bot_commands(app):
-    commands = [
+    public_cmds = [
+        BotCommand("start", "شروع ربات"),
+        BotCommand("help", "راهنما"),
+    ]
+    admin_cmds = [
         BotCommand("start", "شروع ربات"),
         BotCommand("add", "افزودن اکانت"),
         BotCommand("list", "لیست اکانت‌ها"),
@@ -572,13 +595,26 @@ async def setup_bot_commands(app):
         BotCommand("settings", "تنظیمات"),
         BotCommand("backup", "بکاپ"),
         BotCommand("help", "راهنما"),
+        BotCommand("cancel", "لغو"),
     ]
-    await app.bot.set_my_commands(commands)
+
+    await app.bot.set_my_commands(public_cmds, scope=BotCommandScopeDefault())
+
+    await app.bot.set_my_commands(admin_cmds, scope=BotCommandScopeChat(chat_id=ADMIN_CHAT_ID))
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-    await update.message.reply_text(start_text(), reply_markup=main_menu_kb())
+
+    uid = update.effective_user.id if update.effective_user else None
+    is_admin = (uid == ADMIN_CHAT_ID)
+
+    if is_admin:
+        await update.message.reply_text(user_start_text(), reply_markup=user_menu_kb(is_admin=True))
+    else:
+        await update.message.reply_text(user_start_text(), reply_markup=user_menu_kb(is_admin=False))
+
     return MENU
+
 
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -709,6 +745,38 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     
     await update.message.reply_text(help_text, reply_markup=keyboard)
+    return MENU
+async def user_help_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    help_text = (
+        "📖 راهنمای کاربران\n\n"
+        "• برای استعلام اکانت‌ها روی «استعلام اکانت‌های من» بزنید.\n"
+        "• اگر مشکلی داشتید با پشتیبانی در ارتباط باشید.\n\n"
+        "✅ این بخش در حال تکمیل است."
+    )
+    await q.edit_message_text(help_text, reply_markup=user_menu_kb(is_admin=(q.from_user.id == ADMIN_CHAT_ID)))
+    return MENU
+
+async def user_inquiry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.edit_message_text(
+        "📌 بخش استعلام اکانت‌ها هنوز فعال نشده.\n"
+        "به‌زودی اضافه می‌شود ✅",
+        reply_markup=user_menu_kb(is_admin=(q.from_user.id == ADMIN_CHAT_ID))
+    )
+    return MENU
+async def admin_panel_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    if q.from_user.id != ADMIN_CHAT_ID:
+        await q.answer("⛔️ دسترسی ندارید", show_alert=True)
+        return MENU
+
+    context.user_data.clear()
+    await q.edit_message_text(start_text(), reply_markup=main_menu_kb())
     return MENU
 
 # ==================== SEARCH ====================
@@ -1820,6 +1888,9 @@ def main():
             ],
         states={
             MENU: [
+                CallbackQueryHandler(user_inquiry_cb, pattern="^user_inquiry$"),
+                CallbackQueryHandler(user_help_cb, pattern="^user_help$"),
+                CallbackQueryHandler(admin_panel_cb, pattern="^admin_panel$"),
                 CallbackQueryHandler(menu_add, pattern="^menu_add$"),
                 CallbackQueryHandler(menu_list, pattern="^menu_list$"),
                 CallbackQueryHandler(menu_settings, pattern="^menu_settings$"),
