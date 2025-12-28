@@ -10,7 +10,6 @@ import os
 import sqlite3
 import base64
 import html
-from functools import wraps
 from datetime import datetime, date, timedelta, time as dtime
 
 import jdatetime
@@ -123,14 +122,6 @@ def tr(key: str) -> str:
     return STRINGS.get(key, key)
 
 # ==================== HELPERS ====================
-def clear_state_on_command(handler):
-    @wraps(handler)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *args, **kwargs):
-        if update.message and update.message.text and update.message.text.startswith("/"):
-            context.user_data.clear()
-        return await handler(update, context, *args, **kwargs)
-    return wrapper
-
 def safe_bt(val) -> str:
     return str(val).replace("`", "ˋ")
 
@@ -584,13 +575,11 @@ async def setup_bot_commands(app):
     ]
     await app.bot.set_my_commands(commands)
 
-@clear_state_on_command
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(start_text(), reply_markup=main_menu_kb())
     return MENU
 
-@clear_state_on_command
 async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("✅ ریست شد.\n\n" + start_text(), reply_markup=main_menu_kb())
@@ -603,7 +592,6 @@ async def go_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(start_text(), reply_markup=main_menu_kb())
     return MENU
 
-@clear_state_on_command
 async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     kb = type_pick_kb()
@@ -619,13 +607,11 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(tr("choose_type"), reply_markup=kb)
     return CHOOSING_TYPE
 
-@clear_state_on_command
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text("📋 انتخاب فیلتر:", reply_markup=list_filter_kb())
     return MENU
 
-@clear_state_on_command
 async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not os.path.exists(DB_PATH):
         await update.message.reply_text(tr("db_restore_bad"))
@@ -657,7 +643,6 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return MENU
 
-@clear_state_on_command
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(
@@ -674,13 +659,11 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return WAIT_SEARCH_QUERY
 
-@clear_state_on_command
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await update.message.reply_text(tr("settings_title"), reply_markup=settings_kb())
     return MENU
 
-@clear_state_on_command
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     
