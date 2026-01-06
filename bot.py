@@ -344,7 +344,6 @@ def init_default_texts():
             "کاربر عزیز <code>{buyer_tg}</code>\n\n"
             "اکانت <code>{account_type}</code> شما با یوزر/ایمیل <code>{login}</code>\n"
             "تا <code>{days_left}</code> روز دیگر به پایان می‌رسد.\n\n"
-            "📝 توضیحات: <code>{description}</code>\n\n"
             "در صورت تمایل به تمدید، لطفاً اقدام کنید ✅"
         ),
         "due_day": (
@@ -352,7 +351,6 @@ def init_default_texts():
             "کاربر عزیز <code>{buyer_tg}</code>\n\n"
             "اکانت <code>{account_type}</code> شما با یوزر/ایمیل <code>{login}</code>\n"
             "امروز به پایان رسیده است.\n\n"
-            "📝 توضیحات: <code>{description}</code>\n\n"
             "🏦 نام بانک: <code>{bank_name}</code>\n"
             "💳 شماره کارت: <code>{card_number}</code>\n"
             "👤 به نام: <code>{card_owner}</code>"
@@ -365,7 +363,6 @@ def init_default_texts():
             "🧾 پایان میلادی: <code>{end_date}</code>\n"
             "🗓 پایان شمسی: <code>{end_date_jalali}</code>\n"
             "⌛️ مانده: <code>{days_left}</code> روز\n\n"
-            "📝 توضیحات: <code>{description}</code>"
         ),
         "bank_name": "نام بانک",
         "card_number": "0000-0000-0000-0000",
