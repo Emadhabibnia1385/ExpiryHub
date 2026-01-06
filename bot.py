@@ -2601,6 +2601,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_field_save),
             ],
             WAIT_SEARCH_QUERY: [
+                CallbackQueryHandler(go_home, pattern="^home$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_search_query),
             ],
             WAIT_RENEW_DURATION: [
