@@ -2496,6 +2496,7 @@ def main():
                 MessageHandler(filters.TEXT & ~filters.COMMAND, types_edit_receive),
             ],
             WAIT_TEXT_EDIT: [
+                CallbackQueryHandler(go_home, pattern="^home$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, text_edit_save),
             ],
             WAIT_EDIT_FIELD: [
@@ -2541,3 +2542,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
