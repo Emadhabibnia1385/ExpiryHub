@@ -4,11 +4,6 @@ ExpiryHub - سیستم مدیریت تمدید اکانت‌ها
 توسعه‌دهنده: @EmadHabibnia
 کانال: @ExpiryHub
 
-Fix Pack (HTML-safe + buttons + help separation + copyable code blocks)
-+ FIXES:
-  1) Username inquiry match (buyer_tg saved as @username / username / case-insensitive)
-  2) User inquiry list shows 3 columns (login | type | remaining)
-  3) Text templates become truly copyable: auto-convert `...` / ```...``` to <code>/<pre> on save
 """
 
 import asyncio
@@ -2303,3 +2298,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
