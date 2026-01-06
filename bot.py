@@ -3,7 +3,6 @@
 ExpiryHub - سیستم مدیریت تمدید اکانت‌ها
 توسعه‌دهنده: @EmadHabibnia
 کانال: @ExpiryHub
-
 """
 
 import asyncio
@@ -12,9 +11,13 @@ import sqlite3
 import base64
 import html
 import re
+import io
+import shutil
+import logging
 from datetime import datetime, date, timedelta, time as dtime
 
 import jdatetime
+import pytz
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -22,6 +25,7 @@ from telegram import (
     BotCommand,
     BotCommandScopeDefault,
     BotCommandScopeChat,
+    Document,
 )
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -33,6 +37,8 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
+logger = logging.getLogger(__name__)
 
 # ==================== CONFIG ====================
 TOKEN = os.getenv("TOKEN", "YOUR_BOT_TOKEN").strip()
@@ -50,6 +56,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "ExpiryHub.db")
 PAGE_SIZE = 10
 
+# ==================== DB BACKUP MODULE CONFIG ====================
+TZ = pytz.timezone("Asia/Tehran")
+CB_DB = "db"
+JOB_BACKUP = "expiryhub_auto_backup"
+
 # ==================== STATES ====================
 (
     MENU,
@@ -65,13 +76,15 @@ PAGE_SIZE = 10
     DESCRIPTION,
     TYPES_ADD_WAIT,
     TYPES_EDIT_WAIT,
-    WAIT_RESTORE_FILE,
     WAIT_TEXT_EDIT,
     WAIT_EDIT_FIELD,
     WAIT_SEARCH_QUERY,
     WAIT_RENEW_DURATION,
-    WAIT_USER_INQUIRY_QUERY,
-) = range(19)
+    WAIT_USER_INQUIRY_QUERY,  # (unused)
+    DB_SET_TARGET_ID,
+    DB_SET_INTERVAL,
+    DB_RESTORE_WAIT_DOC,
+) = range(21)
 
 # ==================== STRINGS ====================
 STRINGS = {
@@ -102,7 +115,6 @@ STRINGS = {
     "today_label": "امروز",
     "more_info": "ℹ️ اطلاعات بیشتر",
     "settings_title": "⚙️ تنظیمات ربات\nیکی از گزینه‌ها را انتخاب کن:",
-    "settings_db": "🗄 دیتابیس",
     "settings_texts": "✍️ ویرایش متن‌ها",
     "settings_types": "🗂 مدیریت نوع اکانت",
     "types_title": "🗂 مدیریت نوع اکانت\nیکی را انتخاب کن:",
@@ -116,13 +128,6 @@ STRINGS = {
     "types_edited": "✅ نوع اکانت ویرایش شد.",
     "types_deleted": "🗑 نوع اکانت حذف شد.",
     "types_delete_blocked": "⚠️ این نوع اکانت در اکانت‌ها استفاده شده.",
-    "db_title": "🗄 مدیریت دیتابیس\nیکی را انتخاب کن:",
-    "db_backup": "📦 بکاپ",
-    "db_restore": "♻️ ریستور",
-    "db_backup_caption": "✅ بکاپ آماده است. فایل را دانلود کن:",
-    "db_restore_ask": "♻️ لطفاً فایل بکاپ را همینجا ارسال کن (Document).",
-    "db_restore_done": "✅ ریستور با موفقیت انجام شد.",
-    "db_restore_bad": "❌ این فایل بکاپ معتبر نیست.",
     "home": "🏠 منو",
     "back_filters": "⬅️ تغییر فیلتر",
     "unknown": "⚠️ ورودی نامعتبر است.",
@@ -262,11 +267,20 @@ def init_db():
     )
     """)
 
+    # ✅ settings table for auto-backup module
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS settings(
+        k TEXT PRIMARY KEY,
+        v TEXT NOT NULL
+    )
+    """)
+
     conn.commit()
     conn.close()
 
     ensure_accounts_description_column()
     init_default_texts()
+    ensure_default_settings()
 
 def ensure_accounts_description_column():
     conn = connect()
@@ -321,6 +335,23 @@ def init_default_texts():
     cur = conn.cursor()
     for k, v in defaults.items():
         cur.execute("INSERT OR IGNORE INTO bot_texts(key, body) VALUES (?,?)", (k, v))
+    conn.commit()
+    conn.close()
+
+def ensure_default_settings():
+    conn = connect()
+    cur = conn.cursor()
+
+    def _ensure_setting(key: str, default: str):
+        cur.execute("SELECT 1 FROM settings WHERE k=?", (key,))
+        if cur.fetchone() is None:
+            cur.execute("INSERT INTO settings(k,v) VALUES(?,?)", (key, default))
+
+    _ensure_setting("backup_enabled", "0")                    # 0/1
+    _ensure_setting("backup_target_type", "chat")             # chat/channel (UI)
+    _ensure_setting("backup_target_id", str(ADMIN_CHAT_ID))   # default: admin
+    _ensure_setting("backup_interval_hours", "24")            # default: 24 hours
+
     conn.commit()
     conn.close()
 
@@ -492,7 +523,6 @@ def get_account_full_html(cid: int):
     rem = remaining_days(end_date_s)
     rem_label = tr("expired_label") if rem < 0 else str(rem)
 
-    # ✅ all user fields escaped + copyable in <code>
     return (
         f"✨ نوع اکانت: <code>{h(type_title)}</code>\n"
         f"📅 شروع: <code>{h(start_date_s)}</code>\n"
@@ -516,7 +546,6 @@ def render_template_for_account(key: str, cid: int):
 
     tpl = get_bot_text(key)
 
-    # ✅ escape everything so HTML templates are safe
     data = dict(
         buyer_tg=h(buyer_tg),
         account_type=h(account_type),
@@ -567,15 +596,8 @@ def user_menu_kb(is_admin_user: bool = False):
 def settings_kb():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(tr("settings_types"), callback_data="settings_types")],
-        [InlineKeyboardButton(tr("settings_db"), callback_data="settings_db")],
+        [InlineKeyboardButton("🗄 دیتابیس", callback_data="db:open")],  # ✅ new db module
         [InlineKeyboardButton(tr("settings_texts"), callback_data="settings_texts")],
-        [InlineKeyboardButton(tr("home"), callback_data="home")],
-    ])
-
-def db_kb():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(tr("db_backup"), callback_data="db_backup")],
-        [InlineKeyboardButton(tr("db_restore"), callback_data="db_restore")],
         [InlineKeyboardButton(tr("home"), callback_data="home")],
     ])
 
@@ -693,12 +715,42 @@ async def setup_bot_commands(app):
         BotCommand("list", "لیست اکانت‌ها"),
         BotCommand("search", "جستجوی اکانت"),
         BotCommand("settings", "تنظیمات"),
-        BotCommand("backup", "بکاپ"),
         BotCommand("help", "راهنما"),
         BotCommand("cancel", "لغو"),
     ]
     await app.bot.set_my_commands(public_cmds, scope=BotCommandScopeDefault())
     await app.bot.set_my_commands(admin_cmds, scope=BotCommandScopeChat(chat_id=ADMIN_CHAT_ID))
+
+def schedule_backup_job(app) -> None:
+    # remove old jobs
+    try:
+        for j in app.job_queue.get_jobs_by_name(JOB_BACKUP):
+            j.schedule_removal()
+    except Exception:
+        pass
+
+    # enabled?
+    if get_setting("backup_enabled") != "1":
+        return
+
+    try:
+        hours = int(get_setting("backup_interval_hours") or "24")
+        if hours <= 0:
+            hours = 1
+    except Exception:
+        hours = 24
+
+    seconds = hours * 3600
+    app.job_queue.run_repeating(
+        callback=send_backup_file,
+        interval=seconds,
+        first=seconds,
+        name=JOB_BACKUP,
+    )
+
+async def post_init(app):
+    await setup_bot_commands(app)
+    schedule_backup_job(app)
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
@@ -747,7 +799,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /list لیست اکانت‌ها\n"
             "• /search جستجو\n"
             "• /settings تنظیمات (نوع‌ها/متن‌ها/دیتابیس)\n"
-            "• /backup بکاپ دیتابیس\n"
             "• /cancel لغو و بازگشت\n\n"
             "داخل «اطلاعات بیشتر» هر اکانت:\n"
             "• ویرایش / تمدید / حذف\n"
@@ -880,39 +931,6 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(tr("settings_title"), reply_markup=settings_kb())
     return MENU
 
-async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        await deny_admin_msg(update)
-        return MENU
-    if not os.path.exists(DB_PATH):
-        await update.message.reply_text(tr("db_restore_bad"))
-        return MENU
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"ExpiryHub_{ts}.db"
-    backup_path = os.path.join(BASE_DIR, backup_name)
-
-    try:
-        src = sqlite3.connect(DB_PATH)
-        dst = sqlite3.connect(backup_path)
-        src.backup(dst)
-        dst.close()
-        src.close()
-
-        with open(backup_path, "rb") as f:
-            await update.message.reply_document(
-                document=f,
-                filename=backup_name,
-                caption=tr("db_backup_caption"),
-            )
-    finally:
-        try:
-            if os.path.exists(backup_path):
-                os.remove(backup_path)
-        except Exception:
-            pass
-    return MENU
-
 # ==================== SEARCH ====================
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
@@ -994,15 +1012,6 @@ async def settings_types(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await deny_admin_cb(update)
         return MENU
     await q.edit_message_text(tr("types_title"), reply_markup=types_kb())
-    return MENU
-
-async def settings_db(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.from_user.id != ADMIN_CHAT_ID:
-        await deny_admin_cb(update)
-        return MENU
-    await q.edit_message_text(tr("db_title"), reply_markup=db_kb())
     return MENU
 
 async def settings_texts(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1145,98 +1154,7 @@ async def types_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def noop_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
 
-# ==================== DB BACKUP/RESTORE ====================
-async def db_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.from_user.id != ADMIN_CHAT_ID:
-        await deny_admin_cb(update)
-        return MENU
-
-    if not os.path.exists(DB_PATH):
-        await q.message.reply_text(tr("db_restore_bad"))
-        return MENU
-
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_name = f"ExpiryHub_{ts}.db"
-    backup_path = os.path.join(BASE_DIR, backup_name)
-
-    try:
-        src = sqlite3.connect(DB_PATH)
-        dst = sqlite3.connect(backup_path)
-        src.backup(dst)
-        dst.close()
-        src.close()
-
-        with open(backup_path, "rb") as f:
-            await q.message.reply_document(
-                document=f,
-                filename=backup_name,
-                caption=tr("db_backup_caption"),
-            )
-    finally:
-        try:
-            if os.path.exists(backup_path):
-                os.remove(backup_path)
-        except Exception:
-            pass
-
-    return MENU
-
-async def db_restore_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.from_user.id != ADMIN_CHAT_ID:
-        await deny_admin_cb(update)
-        return MENU
-    await q.edit_message_text(tr("db_restore_ask"))
-    return WAIT_RESTORE_FILE
-
-async def db_restore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        await deny_admin_msg(update)
-        return MENU
-    doc = update.message.document
-    if not doc:
-        await update.message.reply_text(tr("db_restore_bad"))
-        return WAIT_RESTORE_FILE
-
-    tmp_path = os.path.join(BASE_DIR, "restore_tmp.db")
-
-    try:
-        file = await context.bot.get_file(doc.file_id)
-        await file.download_to_drive(custom_path=tmp_path)
-
-        try:
-            with open(tmp_path, "rb") as f:
-                head = f.read(16)
-            if head != b"SQLite format 3\x00":
-                raise ValueError("Invalid")
-        except Exception:
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-            await update.message.reply_text(tr("db_restore_bad"))
-            return WAIT_RESTORE_FILE
-
-        os.replace(tmp_path, DB_PATH)
-        init_db()
-
-        await update.message.reply_text(tr("db_restore_done"), reply_markup=main_menu_kb())
-        return MENU
-
-    except Exception:
-        await update.message.reply_text("❌ خطا در ریستور")
-        return WAIT_RESTORE_FILE
-    finally:
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except Exception:
-            pass
-
-# ==================== TEXT EDITING (FIXED + auto convert backticks) ====================
+# ==================== TEXT EDITING ====================
 async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1288,7 +1206,7 @@ async def text_edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MENU
 
     body = update.message.text
-    body = md_backticks_to_html_code(body)  # ✅ auto-fix copyable blocks
+    body = md_backticks_to_html_code(body)
     set_bot_text(key, body)
 
     await update.message.reply_text("✅ متن ذخیره شد", reply_markup=texts_kb())
@@ -2006,12 +1924,6 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== USER INQUIRY (LIST OWN ACCOUNTS) ====================
 def get_accounts_for_buyer(buyer_keys: list[str]):
-    """
-    Match buyer_tg for:
-      - numeric id
-      - @username / username
-    Case-insensitive.
-    """
     keys = set()
     for k in buyer_keys:
         k = (k or "").strip()
@@ -2023,7 +1935,7 @@ def get_accounts_for_buyer(buyer_keys: list[str]):
             u = k.lstrip("@").strip().lower()
             if u:
                 keys.add(f"@{u}")
-                keys.add(u)  # if saved without @
+                keys.add(u)
 
     if not keys:
         return []
@@ -2045,7 +1957,6 @@ async def user_inquiry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    # buyer keys: numeric id + @username + username (if exists)
     uid = str(q.from_user.id)
     uname_raw = q.from_user.username or ""
     keys = [uid]
@@ -2062,7 +1973,6 @@ async def user_inquiry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return MENU
 
-    # sort by remaining (soonest first)
     items = []
     for cid, login, type_title, end_date_s in rows:
         rem = remaining_days(end_date_s)
@@ -2115,7 +2025,6 @@ def parse_buyer_chat_id(buyer_tg: str):
         return None
     if buyer_tg.isdigit():
         return int(buyer_tg)
-    # ⚠️ sending to username usually won't work unless user started bot and you have chat_id
     return buyer_tg
 
 async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
@@ -2163,11 +2072,333 @@ async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
+# ==================== DB BACKUP MODULE (ExpiryHub) ====================
+def get_setting(k: str) -> str:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("SELECT v FROM settings WHERE k=?", (k,))
+    row = cur.fetchone()
+    conn.close()
+    return str(row[0]) if row else ""
+
+def set_setting(k: str, v: str) -> None:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+        (k, v),
+    )
+    conn.commit()
+    conn.close()
+
+def rtl(text: str) -> str:
+    RLM = "\u200f"
+    return "\n".join([RLM + ln for ln in (text or "").splitlines()])
+
+def _deny_if_not_admin(update: Update) -> bool:
+    uid = update.effective_user.id if update.effective_user else None
+    return uid != ADMIN_CHAT_ID
+
+def backup_filename(prefix: str = "ExpiryHub_backup") -> str:
+    ts = datetime.now(TZ).strftime("%Y-%m-%d_%H-%M-%S")
+    return f"{prefix}_{ts}.db"
+
+def make_backup_bytes() -> bytes:
+    tmp_path = f"/tmp/{backup_filename(prefix='ExpiryHub_sqlite_backup')}"
+    src = sqlite3.connect(DB_PATH)
+    try:
+        dst = sqlite3.connect(tmp_path)
+        try:
+            src.backup(dst)
+            dst.commit()
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+    with open(tmp_path, "rb") as f:
+        data = f.read()
+
+    try:
+        os.remove(tmp_path)
+    except Exception:
+        pass
+
+    return data
+
+def db_menu_text() -> str:
+    enabled = get_setting("backup_enabled") == "1"
+    ttype = get_setting("backup_target_type") or "chat"
+    tid = get_setting("backup_target_id") or str(ADMIN_CHAT_ID)
+    try:
+        hours = int(get_setting("backup_interval_hours") or "24")
+    except Exception:
+        hours = 24
+
+    dest = "آیدی" if ttype == "chat" else "کانال"
+    onoff = "روشن ✅" if enabled else "خاموش ❌"
+
+    return (
+        "🗄 دیتابیس ExpiryHub\n\n"
+        f"🕒 بکاپ خودکار: {onoff}\n"
+        f"📍 مقصد بکاپ: {dest}\n"
+        f"🆔 مقصد فعلی: {tid}\n"
+        f"⏱ هر چند ساعت: {hours}\n"
+    )
+
+def db_menu_kb() -> InlineKeyboardMarkup:
+    enabled = get_setting("backup_enabled") == "1"
+    onoff = "روشن ✅" if enabled else "خاموش ❌"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 گرفتن بکاپ (الان)", callback_data=f"{CB_DB}:backup_now")],
+        [InlineKeyboardButton("📤 وارد کردن بکاپ", callback_data=f"{CB_DB}:restore")],
+        [InlineKeyboardButton(f"🕒 بکاپ خودکار: {onoff}", callback_data=f"{CB_DB}:toggle")],
+        [InlineKeyboardButton("📍 مقصد بکاپ", callback_data=f"{CB_DB}:target")],
+        [InlineKeyboardButton("⏱ هر چند ساعت", callback_data=f"{CB_DB}:interval")],
+        [InlineKeyboardButton("⬅️ بازگشت", callback_data="menu_settings")],
+    ])
+
+def db_target_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 ارسال بکاپ به یک آیدی", callback_data=f"{CB_DB}:target:chat")],
+        [InlineKeyboardButton("📣 ارسال بکاپ به کانال", callback_data=f"{CB_DB}:target:channel")],
+        [InlineKeyboardButton("⬅️ بازگشت", callback_data=f"{CB_DB}:open")],
+    ])
+
+async def send_backup_file(context: ContextTypes.DEFAULT_TYPE) -> None:
+    if get_setting("backup_enabled") != "1":
+        return
+
+    tid = get_setting("backup_target_id") or str(ADMIN_CHAT_ID)
+    try:
+        target_id = int(tid)
+    except Exception:
+        target_id = ADMIN_CHAT_ID
+
+    fname = backup_filename(prefix="ExpiryHub_backup")
+    data = make_backup_bytes()
+
+    bio = io.BytesIO(data)
+    bio.name = fname
+
+    caption = rtl(f"🗄 بکاپ دیتابیس ExpiryHub\n\n📦 {fname}")
+
+    try:
+        await context.bot.send_document(
+            chat_id=target_id,
+            document=bio,
+            filename=fname,
+            caption=caption,
+        )
+    except Exception as e:
+        logger.warning("Auto-backup send failed: %s", e)
+
+async def db_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+
+    if _deny_if_not_admin(update):
+        await q.answer("⛔️ فقط ادمین دسترسی دارد", show_alert=True)
+        return MENU
+
+    parts = (q.data or "").split(":")
+    act = parts[1] if len(parts) > 1 else ""
+
+    if act == "open":
+        await q.edit_message_text(rtl(db_menu_text()), reply_markup=db_menu_kb())
+        return MENU
+
+    if act == "backup_now":
+        fname = backup_filename(prefix="ExpiryHub_backup")
+        data = make_backup_bytes()
+        bio = io.BytesIO(data)
+        bio.name = fname
+
+        await q.edit_message_text(rtl("در حال ارسال بکاپ..."), reply_markup=db_menu_kb())
+        await context.bot.send_document(
+            chat_id=update.effective_user.id,
+            document=bio,
+            filename=fname,
+            caption=rtl(f"🗄 بکاپ دیتابیس ExpiryHub\n\n📦 {fname}"),
+        )
+        await q.edit_message_text(rtl(db_menu_text()), reply_markup=db_menu_kb())
+        return MENU
+
+    if act == "toggle":
+        cur = get_setting("backup_enabled") or "0"
+        set_setting("backup_enabled", "0" if cur == "1" else "1")
+        schedule_backup_job(context.application)
+        await q.edit_message_text(rtl(db_menu_text()), reply_markup=db_menu_kb())
+        return MENU
+
+    if act == "target":
+        await q.edit_message_text(
+            rtl(
+                "📍 مقصد بکاپ\n\n"
+                "یکی از گزینه‌ها را انتخاب کنید:\n"
+                "• ارسال به آیدی: آیدی عددی چت/گروه\n"
+                "• ارسال به کانال: آیدی عددی کانال (مثل -100...)\n\n"
+                "ℹ️ اگر کانال انتخاب می‌کنی، ربات باید داخل کانال اجازه ارسال داشته باشد."
+            ),
+            reply_markup=db_target_kb(),
+        )
+        return MENU
+
+    await q.edit_message_text(rtl("دستور ناشناخته."), reply_markup=db_menu_kb())
+    return MENU
+
+async def db_target_choice_cb(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+
+    if _deny_if_not_admin(update):
+        await q.answer("⛔️ فقط ادمین دسترسی دارد", show_alert=True)
+        return MENU
+
+    parts = (q.data or "").split(":")
+    target_type = parts[2] if len(parts) > 2 else ""
+
+    if target_type == "chat":
+        set_setting("backup_target_type", "chat")
+        await q.edit_message_text(
+            rtl(
+                "👤 ارسال بکاپ به آیدی\n\n"
+                f"آیدی عددی مقصد را وارد کنید.\n"
+                f"اگر /skip بزنید → پیش‌فرض: {ADMIN_CHAT_ID}"
+            )
+        )
+        return DB_SET_TARGET_ID
+
+    if target_type == "channel":
+        set_setting("backup_target_type", "channel")
+        await q.edit_message_text(
+            rtl(
+                "📣 ارسال بکاپ به کانال\n\n"
+                "آیدی عددی کانال را وارد کنید (مثل -1001234567890).\n\n"
+                "⚠️ ربات باید در کانال اجازه ارسال داشته باشد."
+            )
+        )
+        return DB_SET_TARGET_ID
+
+    await q.edit_message_text(rtl("گزینه نامعتبر."), reply_markup=db_menu_kb())
+    return MENU
+
+async def db_set_target_id_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("⛔️ فقط ادمین دسترسی دارد")
+        return MENU
+
+    text = (update.message.text or "").strip()
+
+    if text.startswith("/skip"):
+        set_setting("backup_target_id", str(ADMIN_CHAT_ID))
+        await update.effective_chat.send_message(rtl("✅ مقصد روی آیدی پیش‌فرض ادمین تنظیم شد."))
+    else:
+        if not re.fullmatch(r"-?\d+", text):
+            await update.effective_chat.send_message(rtl("❌ فقط آیدی عددی وارد کنید (مثلاً 123 یا -100...)."))
+            return DB_SET_TARGET_ID
+        set_setting("backup_target_id", text)
+        await update.effective_chat.send_message(rtl("✅ مقصد بکاپ ثبت شد."))
+
+    schedule_backup_job(context.application)
+    await update.effective_chat.send_message(rtl(db_menu_text()), reply_markup=db_menu_kb())
+    return MENU
+
+async def db_interval_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+
+    if _deny_if_not_admin(update):
+        await q.answer("⛔️ فقط ادمین دسترسی دارد", show_alert=True)
+        return MENU
+
+    await q.edit_message_text(rtl("⏱ عدد فاصله بکاپ خودکار را به ساعت وارد کنید (مثلاً 24):"))
+    return DB_SET_INTERVAL
+
+async def db_set_interval_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("⛔️ فقط ادمین دسترسی دارد")
+        return MENU
+
+    t = (update.message.text or "").strip()
+    if not re.fullmatch(r"\d+", t):
+        await update.effective_chat.send_message(rtl("❌ فقط عدد وارد کنید (ساعت):"))
+        return DB_SET_INTERVAL
+
+    hours = max(1, int(t))
+    set_setting("backup_interval_hours", str(hours))
+    schedule_backup_job(context.application)
+
+    await update.effective_chat.send_message(rtl("✅ فاصله بکاپ خودکار ثبت شد."))
+    await update.effective_chat.send_message(rtl(db_menu_text()), reply_markup=db_menu_kb())
+    return MENU
+
+async def db_restore_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    q = update.callback_query
+    await q.answer()
+
+    if _deny_if_not_admin(update):
+        await q.answer("⛔️ فقط ادمین دسترسی دارد", show_alert=True)
+        return MENU
+
+    await q.edit_message_text(rtl("📤 لطفاً فایل بکاپ با پسوند .db را ارسال کنید:"))
+    return DB_RESTORE_WAIT_DOC
+
+async def db_restore_wait_doc(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    if _deny_if_not_admin(update):
+        await update.message.reply_text("⛔️ فقط ادمین دسترسی دارد")
+        return MENU
+
+    msg = update.message
+    if not msg or not msg.document:
+        await update.effective_chat.send_message(rtl("❌ لطفاً یک فایل .db ارسال کنید."))
+        return DB_RESTORE_WAIT_DOC
+
+    doc: Document = msg.document
+    fname = (doc.file_name or "").lower()
+    if not fname.endswith(".db"):
+        await update.effective_chat.send_message(rtl("❌ فقط فایل با پسوند .db قابل قبول است."))
+        return DB_RESTORE_WAIT_DOC
+
+    file = await context.bot.get_file(doc.file_id)
+    tmp_in = f"/tmp/restore_{datetime.now(TZ).strftime('%Y%m%d_%H%M%S')}.db"
+    await file.download_to_drive(custom_path=tmp_in)
+
+    # emergency backup before restore
+    try:
+        emergency_name = backup_filename(prefix="ExpiryHub_emergency_before_restore")
+        data = make_backup_bytes()
+        bio = io.BytesIO(data)
+        bio.name = emergency_name
+
+        await update.effective_chat.send_message(rtl("🧯 بکاپ اضطراری از دیتابیس فعلی گرفته شد."))
+        await context.bot.send_document(
+            chat_id=update.effective_user.id,
+            document=bio,
+            filename=emergency_name,
+            caption=rtl(f"🧯 بکاپ اضطراری قبل از ریستور\n\n📦 {emergency_name}"),
+        )
+    except Exception as e:
+        logger.warning("Failed to send emergency backup: %s", e)
+
+    try:
+        shutil.move(tmp_in, DB_PATH)
+        init_db()
+        await update.effective_chat.send_message(rtl("✅ بکاپ با موفقیت وارد شد."))
+    except Exception as e:
+        logger.exception("Restore failed: %s", e)
+        await update.effective_chat.send_message(rtl("❌ خطا در ریستور بکاپ."))
+        return MENU
+
+    schedule_backup_job(context.application)
+    await update.effective_chat.send_message(rtl(db_menu_text()), reply_markup=db_menu_kb())
+    return MENU
+
 # ==================== MAIN ====================
 def main():
     init_db()
     app = ApplicationBuilder().token(TOKEN).build()
-    app.post_init = setup_bot_commands
+    app.post_init = post_init
 
     conv = ConversationHandler(
         entry_points=[
@@ -2177,7 +2408,6 @@ def main():
             CommandHandler("list", cmd_list),
             CommandHandler("search", cmd_search),
             CommandHandler("settings", cmd_settings),
-            CommandHandler("backup", cmd_backup),
         ],
         states={
             MENU: [
@@ -2193,10 +2423,14 @@ def main():
                 CallbackQueryHandler(menu_list, pattern="^menu_list$"),
                 CallbackQueryHandler(menu_settings, pattern="^menu_settings$"),
                 CallbackQueryHandler(settings_types, pattern="^settings_types$"),
-                CallbackQueryHandler(settings_db, pattern="^settings_db$"),
                 CallbackQueryHandler(settings_texts, pattern="^settings_texts$"),
-                CallbackQueryHandler(db_backup, pattern="^db_backup$"),
-                CallbackQueryHandler(db_restore_prompt, pattern="^db_restore$"),
+
+                # ✅ new DB module callbacks
+                CallbackQueryHandler(db_cb, pattern=rf"^{CB_DB}:(open|backup_now|toggle|target)$"),
+                CallbackQueryHandler(db_target_choice_cb, pattern=rf"^{CB_DB}:target:(chat|channel)$"),
+                CallbackQueryHandler(db_interval_entry, pattern=rf"^{CB_DB}:interval$"),
+                CallbackQueryHandler(db_restore_entry, pattern=rf"^{CB_DB}:restore$"),
+
                 CallbackQueryHandler(types_add_prompt, pattern="^types_add$"),
                 CallbackQueryHandler(types_list, pattern=r"^types_list:\d+$"),
                 CallbackQueryHandler(types_edit_prompt, pattern=r"^types_edit:\d+:\d+$"),
@@ -2261,9 +2495,6 @@ def main():
             TYPES_EDIT_WAIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, types_edit_receive),
             ],
-            WAIT_RESTORE_FILE: [
-                MessageHandler(filters.Document.ALL, db_restore_receive),
-            ],
             WAIT_TEXT_EDIT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, text_edit_save),
             ],
@@ -2276,6 +2507,18 @@ def main():
             WAIT_RENEW_DURATION: [
                 CallbackQueryHandler(renew_duration_choice_cb, pattern=r"^dur_"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, renew_manual_msg),
+            ],
+
+            # ✅ DB module states
+            DB_SET_TARGET_ID: [
+                CommandHandler("skip", db_set_target_id_input),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, db_set_target_id_input),
+            ],
+            DB_SET_INTERVAL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, db_set_interval_input),
+            ],
+            DB_RESTORE_WAIT_DOC: [
+                MessageHandler(filters.Document.ALL, db_restore_wait_doc),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_cmd)],
@@ -2298,4 +2541,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
