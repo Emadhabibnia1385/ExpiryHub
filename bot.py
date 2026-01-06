@@ -880,7 +880,22 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(text, reply_markup=main_menu_kb())
     else:
-         text = (
+        text = (
+            "📖 راهنمای کاربران ExpiryHub\n\n"
+            "• برای دیدن اکانت‌های خود: روی «استعلام اکانت‌های من» بزنید.\n"
+            "• اگر یوزرنیم دارید، اکانت‌ها می‌توانند با @username هم ثبت شوند.\n"
+            "• پیام‌های ۲ روز مانده و روز سررسید (در صورت امکان) برای شما هم ارسال می‌شود.\n"
+        )
+        await update.message.reply_text(text, reply_markup=user_menu_kb(False))
+    return MENU
+
+async def cmd_help_admin_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if q.from_user.id != ADMIN_CHAT_ID:
+        await q.answer("⛔️ دسترسی ندارید", show_alert=True)
+        return MENU
+        text = (
             "📖 راهنمای کامل پنل مدیریت ExpiryHub\n\n"
             "پنل مدیریت ExpiryHub برای کنترل و مدیریت کامل اکانت‌ها طراحی شده است.\n\n"
 
@@ -953,23 +968,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             "━━━━━━━━━━━━━━\n"
             "🛠 توسعه‌دهنده: @emadhabibnia"
-        )   
-    await update.message.reply_text(text, reply_markup=user_menu_kb(False))
-    return MENU
-
-async def cmd_help_admin_inline(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if q.from_user.id != ADMIN_CHAT_ID:
-        await q.answer("⛔️ دسترسی ندارید", show_alert=True)
-        return MENU
-    text = (
-        "📖 راهنمای پنل مدیریت ExpiryHub\n\n"
-        "• افزودن اکانت: «افزودن اکانت جدید» یا /add\n"
-        "• لیست: /list\n"
-        "• جستجو: /search\n"
-        "• تنظیمات: نوع‌ها/متن‌ها/دیتابیس\n"
-        "• ویرایش متن‌ها: قالب‌ها HTML هستند و فیلدها در <code>کپی‌پذیر</code> نمایش داده می‌شوند."
     )
     await q.edit_message_text(text, reply_markup=main_menu_kb(), parse_mode=ParseMode.HTML)
     return MENU
