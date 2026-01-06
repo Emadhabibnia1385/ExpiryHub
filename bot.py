@@ -541,7 +541,7 @@ def get_account_full_html(cid: int):
         f"⌛️ مانده: <code>{h(rem_label)}</code>\n"
         f"🧾 پایان میلادی: <code>{h(end_date_s)}</code>\n"
         f"🗓 پایان شمسی: <code>{h(end_j)}</code>\n"
-        f"👤 تلگرام: <code>{h(buyer_tg)}</code>\n"
+        f"👤 تلگرام: {h(buyer_tg)}\n"
         f"📧 یوزر/ایمیل: <code>{h(login)}</code>\n"
         f"🔑 پسورد: <code>{h(password)}</code>\n"
         f"📝 توضیحات: <code>{h(description)}</code>"
