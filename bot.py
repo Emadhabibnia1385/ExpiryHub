@@ -5,6 +5,10 @@ ExpiryHub - سیستم مدیریت تمدید اکانت‌ها
 کانال: @ExpiryHub
 
 Fix Pack (HTML-safe + buttons + help separation + copyable code blocks)
++ FIXES:
+  1) Username inquiry match (buyer_tg saved as @username / username / case-insensitive)
+  2) User inquiry list shows 3 columns (login | type | remaining)
+  3) Text templates become truly copyable: auto-convert `...` / ```...``` to <code>/<pre> on save
 """
 
 import asyncio
@@ -12,6 +16,7 @@ import os
 import sqlite3
 import base64
 import html
+import re
 from datetime import datetime, date, timedelta, time as dtime
 
 import jdatetime
@@ -170,6 +175,42 @@ def user_identifier(update: Update) -> str:
         return f"@{uname}"
     return str(uid) if uid is not None else ""
 
+def normalize_buyer_tg(raw: str) -> str:
+    """
+    Normalize buyer_tg:
+      - numeric id stays as-is
+      - username -> always '@' + lowercase
+    """
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if s.isdigit():
+        return s
+    s = s.lstrip("@").strip().lower()
+    return f"@{s}" if s else ""
+
+def md_backticks_to_html_code(text: str) -> str:
+    """
+    Convert markdown-style code markers to HTML code blocks so Telegram HTML ParseMode
+    shows copyable <code>/<pre>.
+      - ```...``` -> <pre>...</pre>
+      - `...`     -> <code>...</code>
+    """
+    if not text:
+        return text
+
+    text = re.sub(
+        r"```([\s\S]*?)```",
+        lambda m: f"<pre>{html.escape(m.group(1))}</pre>",
+        text
+    )
+    text = re.sub(
+        r"`([^`\n]+)`",
+        lambda m: f"<code>{html.escape(m.group(1))}</code>",
+        text
+    )
+    return text
+
 def start_text_admin() -> str:
     return (
         "سلام 👋\n"
@@ -287,6 +328,7 @@ def init_default_texts():
         cur.execute("INSERT OR IGNORE INTO bot_texts(key, body) VALUES (?,?)", (k, v))
     conn.commit()
     conn.close()
+
 def reset_default_texts(force: bool = True):
     defaults = {
         "reminder_2days": (
@@ -326,7 +368,11 @@ def reset_default_texts(force: bool = True):
     cur = conn.cursor()
     for k, v in defaults.items():
         if force:
-            cur.execute("INSERT INTO bot_texts(key, body) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET body=excluded.body", (k, v))
+            cur.execute(
+                "INSERT INTO bot_texts(key, body) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET body=excluded.body",
+                (k, v),
+            )
         else:
             cur.execute("INSERT OR IGNORE INTO bot_texts(key, body) VALUES (?, ?)", (k, v))
     conn.commit()
@@ -494,7 +540,6 @@ def render_template_for_account(key: str, cid: int):
     try:
         return tpl.format(**data)
     except Exception:
-        # اگر ادمین متن را خراب کرد (متغیر اشتباه گذاشت)
         return "❌ خطا در قالب متن. لطفاً متن را در تنظیمات اصلاح کنید."
 
 # ==================== KEYBOARDS ====================
@@ -674,7 +719,6 @@ async def go_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
     if q.from_user.id == ADMIN_CHAT_ID:
-        # برگشت به منوی کاربری ادمین (با امکان ورود به پنل)
         await q.edit_message_text(start_text_user(), reply_markup=user_menu_kb(is_admin_user=True))
     else:
         await q.edit_message_text(start_text_user(), reply_markup=user_menu_kb(is_admin_user=False))
@@ -1197,7 +1241,7 @@ async def db_restore_receive(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception:
             pass
 
-# ==================== TEXT EDITING (FIXED) ====================
+# ==================== TEXT EDITING (FIXED + auto convert backticks) ====================
 async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -1223,7 +1267,8 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>{bank_name}</code>\n"
         "• <code>{card_number}</code>\n"
         "• <code>{card_owner}</code>\n\n"
-        "✅ نکته: متن‌ها HTML هستند و فیلدهای کپی‌پذیر را داخل <code>...</code> قرار دهید."
+        "✅ نکته: متن‌ها HTML هستند و فیلدهای کپی‌پذیر را داخل <code>...</code> قرار دهید.\n"
+        "✅ اگر با بک‌تیک (`...`) بنویسید، موقع ذخیره خودکار تبدیل به <code>...</code> می‌شود."
     )
 
     current = get_bot_text(key)
@@ -1248,6 +1293,7 @@ async def text_edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return MENU
 
     body = update.message.text
+    body = md_backticks_to_html_code(body)  # ✅ auto-fix copyable blocks
     set_bot_text(key, body)
 
     await update.message.reply_text("✅ متن ذخیره شد", reply_markup=texts_kb())
@@ -1506,7 +1552,7 @@ async def buyer_tg_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         await deny_admin_msg(update)
         return MENU
-    context.user_data["buyer_tg"] = str(update.message.text).strip()
+    context.user_data["buyer_tg"] = normalize_buyer_tg(update.message.text)
     await update.message.reply_text(tr("ask_login"))
     return LOGIN
 
@@ -1533,7 +1579,6 @@ async def description_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["description"] = str(update.message.text).strip()
 
-    type_title = context.user_data["account_type_title"]
     start_date_s = context.user_data["start_date"]
     duration_days = int(context.user_data["duration_days"])
     end_date_s = context.user_data["end_date"]
@@ -1939,6 +1984,9 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ فیلد نامعتبر")
         return MENU
 
+    if field == "buyer_tg":
+        new_val = normalize_buyer_tg(new_val)
+
     conn = connect()
     cur = conn.cursor()
     cur.execute(f"UPDATE accounts SET {field}=? WHERE id=?", (new_val, int(cid)))
@@ -1963,16 +2011,37 @@ async def edit_field_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== USER INQUIRY (LIST OWN ACCOUNTS) ====================
 def get_accounts_for_buyer(buyer_keys: list[str]):
-    # match buyer_tg exactly (common usage)
+    """
+    Match buyer_tg for:
+      - numeric id
+      - @username / username
+    Case-insensitive.
+    """
+    keys = set()
+    for k in buyer_keys:
+        k = (k or "").strip()
+        if not k:
+            continue
+        if k.isdigit():
+            keys.add(k)
+        else:
+            u = k.lstrip("@").strip().lower()
+            if u:
+                keys.add(f"@{u}")
+                keys.add(u)  # if saved without @
+
+    if not keys:
+        return []
+
     conn = connect()
     cur = conn.cursor()
-    placeholders = ",".join(["?"] * len(buyer_keys))
+    placeholders = ",".join(["?"] * len(keys))
     cur.execute(f"""
         SELECT c.id, c.login, t.title, c.end_date
         FROM accounts c
         JOIN account_types t ON t.id = c.account_type_id
-        WHERE c.buyer_tg IN ({placeholders})
-    """, tuple(buyer_keys))
+        WHERE LOWER(c.buyer_tg) IN ({placeholders})
+    """, tuple(x.lower() for x in keys))
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -1981,12 +2050,13 @@ async def user_inquiry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    # buyer keys: numeric id + @username (if exists)
+    # buyer keys: numeric id + @username + username (if exists)
     uid = str(q.from_user.id)
-    uname = f"@{q.from_user.username}" if q.from_user.username else None
+    uname_raw = q.from_user.username or ""
     keys = [uid]
-    if uname:
-        keys.append(uname)
+    if uname_raw:
+        keys.append(f"@{uname_raw}")
+        keys.append(uname_raw)
 
     rows = get_accounts_for_buyer(keys)
     if not rows:
@@ -2008,7 +2078,11 @@ async def user_inquiry_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = []
     for rem, cid, login, type_title, _ in items[:20]:
         label = "منقضی ❌" if rem < 0 else ("امروز ⏳" if rem == 0 else f"{rem} روز")
-        kb.append([InlineKeyboardButton(f"{login} | {type_title} | {label}", callback_data=f"user_inquiry_show:{cid}")])
+        kb.append([
+            InlineKeyboardButton(login[:24], callback_data=f"user_inquiry_show:{cid}"),
+            InlineKeyboardButton(type_title[:18], callback_data="noop_u"),
+            InlineKeyboardButton(label[:12], callback_data="noop_u"),
+        ])
 
     kb.append([InlineKeyboardButton("🏠 منو", callback_data="home")])
 
@@ -2023,11 +2097,21 @@ async def user_inquiry_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = render_template_for_account("inquiry", cid)
     if not text:
-        await q.edit_message_text("❌ اکانت پیدا نشد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="home")]]))
+        await q.edit_message_text(
+            "❌ اکانت پیدا نشد.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 منو", callback_data="home")]])
+        )
         return MENU
 
-    await q.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="user_inquiry")]]))
+    await q.edit_message_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ بازگشت", callback_data="user_inquiry")]])
+    )
     return MENU
+
+async def noop_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
 
 # ==================== REMINDERS ====================
 def parse_buyer_chat_id(buyer_tg: str):
@@ -2036,7 +2120,7 @@ def parse_buyer_chat_id(buyer_tg: str):
         return None
     if buyer_tg.isdigit():
         return int(buyer_tg)
-    # sometimes username could be used; may work only if user started bot
+    # ⚠️ sending to username usually won't work unless user started bot and you have chat_id
     return buyer_tg
 
 async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
@@ -2059,12 +2143,10 @@ async def check_daily_reminders(context: ContextTypes.DEFAULT_TYPE):
         if diff == 2:
             text = render_template_for_account("reminder_2days", int(cid))
             if text:
-                # to admin
                 try:
                     await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=text, parse_mode=ParseMode.HTML)
                 except Exception:
                     pass
-                # to buyer (best-effort)
                 try:
                     chat_id = parse_buyer_chat_id(buyer_tg)
                     if chat_id:
@@ -2107,8 +2189,10 @@ def main():
                 # user
                 CallbackQueryHandler(user_inquiry_cb, pattern="^user_inquiry$"),
                 CallbackQueryHandler(user_inquiry_show, pattern=r"^user_inquiry_show:\d+$"),
+                CallbackQueryHandler(noop_user, pattern=r"^noop_u$"),
                 CallbackQueryHandler(user_help_cb, pattern="^user_help$"),
                 CallbackQueryHandler(admin_panel_cb, pattern="^admin_panel$"),
+
                 # admin panel
                 CallbackQueryHandler(menu_add, pattern="^menu_add$"),
                 CallbackQueryHandler(menu_list, pattern="^menu_list$"),
@@ -2219,4 +2303,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
