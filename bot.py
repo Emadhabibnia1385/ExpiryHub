@@ -39,6 +39,7 @@ from telegram.ext import (
 )
 import sys
 import subprocess
+import re
 
 def ensure_jobqueue_installed() -> bool:
     """
@@ -1386,7 +1387,7 @@ async def text_edit_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• <code>{bank_name}</code>\n"
         "• <code>{card_number}</code>\n"
         "• <code>{card_owner}</code>\n\n"
-        "✅ نکته: متن‌ها HTML هستند و فیلدهای کپی‌پذیر را داخل <code><code>.<code></code> قرار دهید.\n"
+        "✅ نکته: متن‌ها HTML هستند و فیلدهای کپی‌پذیر را داخل دوتا <code> قرار دهید.\n"
     )
 
     current = get_bot_text(key)
