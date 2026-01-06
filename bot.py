@@ -895,7 +895,7 @@ async def cmd_help_admin_inline(update: Update, context: ContextTypes.DEFAULT_TY
     if q.from_user.id != ADMIN_CHAT_ID:
         await q.answer("⛔️ دسترسی ندارید", show_alert=True)
         return MENU
-        text = (
+    text = (
             "📖 راهنمای کامل پنل مدیریت ExpiryHub\n\n"
             "پنل مدیریت ExpiryHub برای کنترل و مدیریت کامل اکانت‌ها طراحی شده است.\n\n"
 
