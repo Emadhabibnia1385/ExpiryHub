@@ -37,6 +37,36 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+import sys
+import subprocess
+
+def ensure_jobqueue_installed() -> bool:
+    """
+    Ensure python-telegram-bot JobQueue extra deps are installed.
+    Returns True if job queue deps are available after this.
+    """
+    try:
+        import apscheduler  # noqa: F401
+        return True
+    except Exception:
+        pass
+
+    try:
+        print("⚙️ Installing JobQueue deps (python-telegram-bot[job-queue]) ...")
+        subprocess.check_call([
+            sys.executable, "-m", "pip", "install", "-U",
+            "python-telegram-bot[job-queue]"
+        ])
+    except Exception as e:
+        print("❌ Auto-install failed:", e)
+        return False
+
+
+    try:
+        import apscheduler  # noqa: F401
+        return True
+    except Exception:
+        return False
 
 logger = logging.getLogger(__name__)
 
@@ -733,17 +763,35 @@ async def setup_bot_commands(app):
     await app.bot.set_my_commands(admin_cmds, scope=BotCommandScopeChat(chat_id=ADMIN_CHAT_ID))
 
 def schedule_backup_job(app) -> None:
-    # remove old jobs
+    """
+    Schedule (or re-schedule) auto-backup job using PTB JobQueue.
+    If JobQueue is missing, tries to install it automatically.
+    """
+
+    # اگر JobQueue وجود ندارد، تلاش برای نصب خودکار
+    if not getattr(app, "job_queue", None):
+        ok = ensure_jobqueue_installed()
+        if not ok:
+            print("⚠️ JobQueue is not available; auto-backup disabled.")
+            return
+
+    # بعد از نصب ممکن است هنوز job_queue در همین اجرا ساخته نشده باشد
+    if not getattr(app, "job_queue", None):
+        print("⚠️ JobQueue installed but not initialized in this run. Restart bot once.")
+        return
+
+    # حذف jobهای قبلی با همین نام
     try:
         for j in app.job_queue.get_jobs_by_name(JOB_BACKUP):
             j.schedule_removal()
     except Exception:
         pass
 
-    # enabled?
+    # اگر بکاپ خودکار خاموش است، چیزی زمان‌بندی نکن
     if get_setting("backup_enabled") != "1":
         return
 
+    # خواندن فاصله بکاپ به ساعت (پیش‌فرض 24)
     try:
         hours = int(get_setting("backup_interval_hours") or "24")
         if hours <= 0:
@@ -752,6 +800,8 @@ def schedule_backup_job(app) -> None:
         hours = 24
 
     seconds = hours * 3600
+
+    # زمان‌بندی job تکرارشونده
     app.job_queue.run_repeating(
         callback=send_backup_file,
         interval=seconds,
@@ -759,9 +809,17 @@ def schedule_backup_job(app) -> None:
         name=JOB_BACKUP,
     )
 
+    print(f"✅ Auto-backup job scheduled every {hours} hour(s).")
+
+
 async def post_init(app):
     await setup_bot_commands(app)
     schedule_backup_job(app)
+    try:
+        schedule_backup_job(app)
+    except Exception as e:
+        print("⚠️ schedule_backup_job failed:", e)
+
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
